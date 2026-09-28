@@ -1,20 +1,8 @@
 import base64
-try:
-    import imghdr
-except ModuleNotFoundError:
-    # imghdr was removed in Python 3.13; provide a minimal stub.
-    import sys as _sys
-
-    class _ImghdrStub:
-        @staticmethod
-        def what(file, h=None):
-            return None
-
-    imghdr = _ImghdrStub()
-    _sys.modules["imghdr"] = imghdr
 import io
 import os
 import sys
+from io import BytesIO
 from typing import List, Optional, Dict, Tuple
 
 from urllib.parse import urlparse
@@ -310,10 +298,14 @@ def is_mac():
 
 
 def get_image_ext(img_bytes):
-    w = imghdr.what("", img_bytes)
-    if w is None:
-        w = "jpeg"
-    return w
+    try:
+        with Image.open(BytesIO(img_bytes)) as img:
+            fmt = (img.format or "").lower()
+        if fmt:
+            return fmt
+    except Exception:
+        pass
+    return "jpeg"
 
 
 def decode_base64_to_image(
