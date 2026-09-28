@@ -448,6 +448,29 @@ class InpaintRequest(BaseModel):
         return values
 
 
+class BatchInpaintRequest(BaseModel):
+    """Batch inpainting request:多个图片共用同一个 mask。
+
+    mask 以 mask_width/mask_height 的像素坐标系提供，服务端会按每张图片的
+    实际尺寸做归一化缩放后再使用。
+    """
+
+    images: List[str] = Field(
+        default_factory=list, description="base64 encoded images"
+    )
+    filenames: List[str] = Field(
+        default_factory=list,
+        description="Original filenames, same order as images",
+    )
+    mask: str = Field(..., description="base64 encoded mask shared by all images")
+    mask_width: int = Field(..., gt=0, description="Width of the mask image")
+    mask_height: int = Field(..., gt=0, description="Height of the mask image")
+    config: InpaintRequest = Field(
+        default_factory=InpaintRequest,
+        description="Inpainting config shared by all images",
+    )
+
+
 class RunPluginRequest(BaseModel):
     name: str
     image: str = Field(..., description="base64 encoded image")

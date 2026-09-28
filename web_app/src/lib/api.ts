@@ -25,6 +25,59 @@ const throwErrors = async (res: any): Promise<never> => {
   )
 }
 
+function buildInpaintConfig(
+  settings: Settings,
+  croperRect: Rect,
+  extenderState: Rect,
+  exampleImageBase64: string | null
+) {
+  return {
+    ldm_steps: settings.ldmSteps,
+    ldm_sampler: settings.ldmSampler,
+    zits_wireframe: settings.zitsWireframe,
+    cv2_flag: settings.cv2Flag,
+    cv2_radius: settings.cv2Radius,
+    hd_strategy: "Crop",
+    hd_strategy_crop_triger_size: 640,
+    hd_strategy_crop_margin: 128,
+    hd_trategy_resize_imit: 2048,
+    prompt: settings.prompt,
+    negative_prompt: settings.negativePrompt,
+    use_croper: settings.showCropper,
+    croper_x: croperRect.x,
+    croper_y: croperRect.y,
+    croper_height: croperRect.height,
+    croper_width: croperRect.width,
+    use_extender: settings.showExtender,
+    extender_x: extenderState.x,
+    extender_y: extenderState.y,
+    extender_height: extenderState.height,
+    extender_width: extenderState.width,
+    sd_mask_blur: settings.sdMaskBlur,
+    sd_strength: settings.sdStrength,
+    sd_steps: settings.sdSteps,
+    sd_guidance_scale: settings.sdGuidanceScale,
+    sd_sampler: settings.sdSampler,
+    sd_seed: settings.seedFixed ? settings.seed : -1,
+    sd_match_histograms: settings.sdMatchHistograms,
+    sd_lcm_lora: settings.enableLCMLora,
+    paint_by_example_example_image: exampleImageBase64,
+    p2p_image_guidance_scale: settings.p2pImageGuidanceScale,
+    enable_controlnet: settings.enableControlnet,
+    controlnet_conditioning_scale: settings.controlnetConditioningScale,
+    controlnet_method: settings.controlnetMethod
+      ? settings.controlnetMethod
+      : "",
+    enable_brushnet: settings.enableBrushNet,
+    brushnet_method: settings.brushnetMethod ? settings.brushnetMethod : "",
+    brushnet_conditioning_scale: settings.brushnetConditioningScale,
+    enable_powerpaint_v2: settings.enablePowerPaintV2,
+    powerpaint_task: settings.showExtender
+      ? PowerPaintTask.outpainting
+      : settings.powerpaintTask,
+  }
+}
+
 export default async function inpaint(
   imageFile: File,
   settings: Settings,
@@ -47,49 +100,12 @@ export default async function inpaint(
     body: JSON.stringify({
       image: imageBase64,
       mask: maskBase64,
-      ldm_steps: settings.ldmSteps,
-      ldm_sampler: settings.ldmSampler,
-      zits_wireframe: settings.zitsWireframe,
-      cv2_flag: settings.cv2Flag,
-      cv2_radius: settings.cv2Radius,
-      hd_strategy: "Crop",
-      hd_strategy_crop_triger_size: 640,
-      hd_strategy_crop_margin: 128,
-      hd_trategy_resize_imit: 2048,
-      prompt: settings.prompt,
-      negative_prompt: settings.negativePrompt,
-      use_croper: settings.showCropper,
-      croper_x: croperRect.x,
-      croper_y: croperRect.y,
-      croper_height: croperRect.height,
-      croper_width: croperRect.width,
-      use_extender: settings.showExtender,
-      extender_x: extenderState.x,
-      extender_y: extenderState.y,
-      extender_height: extenderState.height,
-      extender_width: extenderState.width,
-      sd_mask_blur: settings.sdMaskBlur,
-      sd_strength: settings.sdStrength,
-      sd_steps: settings.sdSteps,
-      sd_guidance_scale: settings.sdGuidanceScale,
-      sd_sampler: settings.sdSampler,
-      sd_seed: settings.seedFixed ? settings.seed : -1,
-      sd_match_histograms: settings.sdMatchHistograms,
-      sd_lcm_lora: settings.enableLCMLora,
-      paint_by_example_example_image: exampleImageBase64,
-      p2p_image_guidance_scale: settings.p2pImageGuidanceScale,
-      enable_controlnet: settings.enableControlnet,
-      controlnet_conditioning_scale: settings.controlnetConditioningScale,
-      controlnet_method: settings.controlnetMethod
-        ? settings.controlnetMethod
-        : "",
-      enable_brushnet: settings.enableBrushNet,
-      brushnet_method: settings.brushnetMethod ? settings.brushnetMethod : "",
-      brushnet_conditioning_scale: settings.brushnetConditioningScale,
-      enable_powerpaint_v2: settings.enablePowerPaintV2,
-      powerpaint_task: settings.showExtender
-        ? PowerPaintTask.outpainting
-        : settings.powerpaintTask,
+      ...buildInpaintConfig(
+        settings,
+        croperRect,
+        extenderState,
+        exampleImageBase64
+      ),
     }),
   })
   if (res.ok) {
@@ -98,6 +114,39 @@ export default async function inpaint(
       blob: URL.createObjectURL(blob),
       seed: res.headers.get("X-Seed"),
     }
+  }
+  throw await throwErrors(res)
+}
+
+/**
+ * 批量重绘：多张图片共用同一个 mask，服务端处理后返回 zip 压缩包。
+ */
+export async function batchInpaintZip(
+  imagesBase64: string[],
+  filenames: string[],
+  maskBase64: string,
+  maskWidth: number,
+  maskHeight: number,
+  settings: Settings,
+  croperRect: Rect,
+  extenderState: Rect
+): Promise<Blob> {
+  const res = await fetch(`${API_ENDPOINT}/batch_inpaint_zip`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      images: imagesBase64,
+      filenames,
+      mask: maskBase64,
+      mask_width: maskWidth,
+      mask_height: maskHeight,
+      config: buildInpaintConfig(settings, croperRect, extenderState, null),
+    }),
+  })
+  if (res.ok) {
+    return await res.blob()
   }
   throw await throwErrors(res)
 }

@@ -1,8 +1,10 @@
 import asyncio
+import io
 import os
 import threading
 import time
 import traceback
+import zipfile
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -52,6 +54,7 @@ from iopaint.schema import (
     ServerConfigResponse,
     SwitchModelRequest,
     InpaintRequest,
+    BatchInpaintRequest,
     RunPluginRequest,
     SDSampler,
     PluginInfo,
@@ -165,6 +168,11 @@ class Api:
         self.add_api_route("/api/v1/model", self.api_switch_model, methods=["POST"], response_model=ModelInfo)
         self.add_api_route("/api/v1/inputimage", self.api_input_image, methods=["GET"])
         self.add_api_route("/api/v1/inpaint", self.api_inpaint, methods=["POST"])
+        self.add_api_route(
+            "/api/v1/batch_inpaint_zip",
+            self.api_batch_inpaint_zip,
+            methods=["POST"],
+        )
         self.add_api_route("/api/v1/switch_plugin_model", self.api_switch_plugin_model, methods=["POST"])
         self.add_api_route("/api/v1/run_plugin_gen_mask", self.api_run_plugin_gen_mask, methods=["POST"])
         self.add_api_route("/api/v1/run_plugin_gen_image", self.api_run_plugin_gen_image, methods=["POST"])
@@ -307,6 +315,88 @@ class Api:
             content=res_img_bytes,
             media_type=f"image/{ext}",
             headers={"X-Seed": str(req.sd_seed)},
+        )
+
+    def api_batch_inpaint_zip(self, req: BatchInpaintRequest):
+        """Batch inpaint multiple images sharing one mask and return a zip."""
+        if len(req.images) == 0:
+            raise HTTPException(status_code=400, detail="No images provided")
+
+        # 传入的 mask 以 mask_width/mask_height 像素坐标系表示，
+        # 每张图片按自身尺寸做归一化缩放后再使用。
+        mask, _, _, _ = decode_base64_to_image(req.mask, gray=True)
+        mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)[1]
+        if mask.shape[1] != req.mask_width or mask.shape[0] != req.mask_height:
+            mask = cv2.resize(
+                mask,
+                (req.mask_width, req.mask_height),
+                interpolation=cv2.INTER_NEAREST,
+            )
+
+        total = len(req.images)
+        used_names: Dict[str, int] = {}
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for index, image_base64 in enumerate(req.images):
+                try:
+                    image, alpha_channel, infos, _ext = decode_base64_to_image(
+                        image_base64
+                    )
+                except Exception as e:
+                    logger.warning(f"Skip invalid image at index {index}: {e}")
+                    continue
+
+                height, width = image.shape[:2]
+                if mask.shape[0] != height or mask.shape[1] != width:
+                    image_mask = cv2.resize(
+                        mask, (width, height), interpolation=cv2.INTER_NEAREST
+                    )
+                else:
+                    image_mask = mask
+
+                raw_name = (
+                    req.filenames[index] if index < len(req.filenames) else ""
+                ) or f"image_{index + 1}"
+                stem = Path(raw_name).stem or f"image_{index + 1}"
+                if stem in used_names:
+                    used_names[stem] += 1
+                    stem = f"{stem}_{used_names[stem]}"
+                else:
+                    used_names[stem] = 0
+
+                logger.info(f"Batch inpainting {index + 1}/{total}: {raw_name}")
+                asyncio.run(
+                    self.sio.emit(
+                        "batch_progress",
+                        {"current": index + 1, "total": total},
+                    )
+                )
+
+                start = time.time()
+                rgb_np_img = self.model_manager(image, image_mask, req.config)
+                logger.info(f"process time: {(time.time() - start) * 1000:.2f}ms")
+                torch_gc()
+
+                rgb_np_img = cv2.cvtColor(
+                    rgb_np_img.astype(np.uint8), cv2.COLOR_BGR2RGB
+                )
+                rgb_res = concat_alpha_channel(rgb_np_img, alpha_channel)
+                img_bytes = pil_to_bytes(
+                    Image.fromarray(rgb_res),
+                    ext="png",
+                    quality=self.config.quality,
+                    infos=infos,
+                )
+                zip_file.writestr(f"{stem}.png", img_bytes)
+
+        asyncio.run(self.sio.emit("batch_finish", {"total": total}))
+        zip_buffer.seek(0)
+        return Response(
+            content=zip_buffer.read(),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": 'attachment; filename="iopaint_batch_results.zip"'
+            },
         )
 
     def api_run_plugin_gen_image(self, req: RunPluginRequest):

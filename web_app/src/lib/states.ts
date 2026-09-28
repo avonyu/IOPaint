@@ -31,12 +31,20 @@ import {
 import {
   blobToImage,
   canvasToImage,
+  convertToBase64,
   dataURItoBlob,
   generateMask,
+  getImageFileSize,
   loadImage,
+  scaleMaskImage,
   srcToFile,
 } from "./utils"
-import inpaint, { getGenInfo, postAdjustMask, runPlugin } from "./api"
+import inpaint, {
+  batchInpaintZip,
+  getGenInfo,
+  postAdjustMask,
+  runPlugin,
+} from "./api"
 import { toast } from "@/components/ui/use-toast"
 
 type FileManagerState = {
@@ -120,6 +128,15 @@ type InteractiveSegState = {
   clicks: number[][]
 }
 
+type BatchState = {
+  files: File[]
+  names: string[]
+  currentIndex: number
+  isProcessing: boolean
+  processedCount: number
+  totalCount: number
+}
+
 type EditorState = {
   baseBrushSize: number
   brushSizeScale: number
@@ -154,6 +171,7 @@ type AppState = {
 
   interactiveSegState: InteractiveSegState
   fileManagerState: FileManagerState
+  batchState: BatchState
 
   cropperState: CropperState
   extenderState: CropperState
@@ -243,6 +261,19 @@ type AppAction = {
   setCurRectMask: (rect: Rect | null) => void
   addRectToCurLineGroup: (rect: Rect) => void
 
+  // 批量图片（共享 mask）
+  isBatchMode: () => boolean
+  setBatchFiles: (files: File[]) => Promise<void>
+  switchBatchIndex: (index: number) => Promise<void>
+  clearBatch: () => void
+  rescaleMask: (
+    fromWidth: number,
+    fromHeight: number,
+    toWidth: number,
+    toHeight: number
+  ) => Promise<void>
+  batchInpaintDownload: () => Promise<void>
+
   adjustMask: (operate: AdjustMaskOperate) => Promise<void>
   clearMask: () => void
 }
@@ -308,6 +339,16 @@ const defaultValues: AppState = {
     inputDirectory: "",
     outputDirectory: "",
   },
+
+  batchState: {
+    files: [],
+    names: [],
+    currentIndex: 0,
+    isProcessing: false,
+    processedCount: 0,
+    totalCount: 0,
+  },
+
   serverConfig: {
     plugins: [],
     modelInfos: [],
@@ -1197,6 +1238,227 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         set((state) => {
           state.editorState.curLineGroup.push(castDraft(rectLine))
         })
+      },
+
+      // 批量图片（共享 mask）
+      isBatchMode: (): boolean => {
+        return get().batchState.files.length > 0
+      },
+
+      setBatchFiles: async (files: File[]) => {
+        if (files.length === 0) {
+          return
+        }
+        set((state) => {
+          state.batchState.files = castDraft(files)
+          state.batchState.names = files.map((f) => f.name)
+          state.batchState.currentIndex = 0
+          state.batchState.processedCount = 0
+          state.batchState.totalCount = files.length
+        })
+        // 载入第一张图片（会重置编辑器状态）
+        await get().setFile(files[0])
+      },
+
+      clearBatch: () => {
+        set((state) => {
+          state.batchState = castDraft(defaultValues.batchState)
+        })
+      },
+
+      switchBatchIndex: async (index: number) => {
+        const { batchState } = get()
+        if (index < 0 || index >= batchState.files.length) {
+          return
+        }
+        if (index === batchState.currentIndex) {
+          return
+        }
+        const fromWidth = get().imageWidth
+        const fromHeight = get().imageHeight
+        const targetFile = batchState.files[index]
+
+        let toWidth = fromWidth
+        let toHeight = fromHeight
+        try {
+          const targetSize = await getImageFileSize(targetFile)
+          toWidth = targetSize[0]
+          toHeight = targetSize[1]
+        } catch (e) {
+          console.error(e)
+        }
+
+        // 在切换前，把共享 mask 从当前图片尺寸缩放到目标图片尺寸
+        if (fromWidth > 0 && fromHeight > 0 && toWidth > 0 && toHeight > 0) {
+          await get().rescaleMask(fromWidth, fromHeight, toWidth, toHeight)
+        }
+
+        set((state) => {
+          state.file = targetFile
+          state.batchState.currentIndex = index
+          // 保留共享 mask（curLineGroup/extraMasks），清空当前图片的重绘历史
+          state.editorState.renders = []
+          state.editorState.lineGroups = []
+          state.editorState.lastLineGroup = []
+          state.editorState.redoRenders = []
+          state.editorState.redoCurLines = []
+          state.editorState.redoLineGroups = []
+          state.editorState.temporaryMasks = []
+          state.cropperState = defaultValues.cropperState
+          state.interactiveSegState = castDraft(
+            defaultValues.interactiveSegState
+          )
+          state.curRectMask = null
+        })
+
+        if (toWidth > 0 && toHeight > 0) {
+          get().setImageSize(toWidth, toHeight)
+        }
+      },
+
+      rescaleMask: async (
+        fromWidth: number,
+        fromHeight: number,
+        toWidth: number,
+        toHeight: number
+      ) => {
+        if (
+          fromWidth <= 0 ||
+          fromHeight <= 0 ||
+          toWidth <= 0 ||
+          toHeight <= 0 ||
+          (fromWidth === toWidth && fromHeight === toHeight)
+        ) {
+          return
+        }
+        const scaleX = toWidth / fromWidth
+        const scaleY = toHeight / fromHeight
+        const scalePoint = (p: Point): Point => ({
+          x: Math.round(p.x * scaleX),
+          y: Math.round(p.y * scaleY),
+        })
+        const scaleLine = (line: Line): Line => {
+          const newLine: Line = { ...line, pts: line.pts.map(scalePoint) }
+          if (line.size) {
+            newLine.size = Math.max(
+              1,
+              Math.round(line.size * ((scaleX + scaleY) / 2))
+            )
+          }
+          return newLine
+        }
+        const scaleGroup = (group: LineGroup): LineGroup =>
+          group.map(scaleLine)
+
+        const {
+          curLineGroup,
+          lastLineGroup,
+          lineGroups,
+          extraMasks,
+          prevExtraMasks,
+          temporaryMasks,
+        } = get().editorState
+
+        const [scaledExtra, scaledPrev, scaledTemp] = await Promise.all([
+          Promise.all(
+            extraMasks.map((m) => scaleMaskImage(m, toWidth, toHeight))
+          ),
+          Promise.all(
+            prevExtraMasks.map((m) => scaleMaskImage(m, toWidth, toHeight))
+          ),
+          Promise.all(
+            temporaryMasks.map((m) => scaleMaskImage(m, toWidth, toHeight))
+          ),
+        ])
+
+        set((state) => {
+          state.editorState.curLineGroup = castDraft(scaleGroup(curLineGroup))
+          state.editorState.lastLineGroup = castDraft(scaleGroup(lastLineGroup))
+          state.editorState.lineGroups = castDraft(lineGroups.map(scaleGroup))
+          state.editorState.extraMasks = castDraft(scaledExtra)
+          state.editorState.prevExtraMasks = castDraft(scaledPrev)
+          state.editorState.temporaryMasks = castDraft(scaledTemp)
+        })
+      },
+
+      batchInpaintDownload: async () => {
+        const {
+          batchState,
+          imageWidth,
+          imageHeight,
+          settings,
+          cropperState,
+          extenderState,
+        } = get()
+        if (batchState.files.length === 0) {
+          return
+        }
+        const { curLineGroup, extraMasks } = get().editorState
+        if (
+          curLineGroup.length === 0 &&
+          extraMasks.length === 0 &&
+          !settings.showExtender
+        ) {
+          toast({
+            variant: "destructive",
+            description: "Please draw mask on picture",
+          })
+          return
+        }
+
+        set((state) => {
+          state.batchState.isProcessing = true
+          state.batchState.processedCount = 0
+          state.batchState.totalCount = state.batchState.files.length
+        })
+
+        try {
+          const maskCanvas = generateMask(
+            imageWidth,
+            imageHeight,
+            [curLineGroup],
+            extraMasks,
+            BRUSH_COLOR
+          )
+          const maskBase64 = maskCanvas.toDataURL()
+
+          const imagesBase64 = await Promise.all(
+            batchState.files.map((f) => convertToBase64(f))
+          )
+
+          const zipBlob = await batchInpaintZip(
+            imagesBase64,
+            batchState.names,
+            maskBase64,
+            imageWidth,
+            imageHeight,
+            settings,
+            cropperState,
+            extenderState
+          )
+
+          const url = URL.createObjectURL(zipBlob)
+          const link = document.createElement("a")
+          link.href = url
+          link.download = "iopaint_batch_results.zip"
+          document.body.appendChild(link)
+          link.click()
+          link.remove()
+          window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+
+          toast({
+            description: `Batch inpainting finished (${batchState.files.length} images)`,
+          })
+        } catch (e: any) {
+          toast({
+            variant: "destructive",
+            description: e.message ? e.message : e.toString(),
+          })
+        } finally {
+          set((state) => {
+            state.batchState.isProcessing = false
+          })
+        }
       },
     })),
     {

@@ -78,6 +78,43 @@ export function canvasToImage(
   })
 }
 
+export function getImageFileSize(file: File): Promise<[number, number]> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      resolve([img.naturalWidth, img.naturalHeight])
+      URL.revokeObjectURL(url)
+    }
+    img.onerror = (err) => {
+      URL.revokeObjectURL(url)
+      reject(err)
+    }
+    img.src = url
+  })
+}
+
+/**
+ * 将 mask 图片按目标尺寸重新绘制（最近邻，保持二值边缘），
+ * 用于批量处理时把共享 mask 适配到不同尺寸的图片。
+ */
+export function scaleMaskImage(
+  source: HTMLImageElement,
+  width: number,
+  height: number
+): Promise<HTMLImageElement> {
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext("2d")
+  if (!ctx) {
+    return Promise.reject(new Error("could not retrieve mask canvas"))
+  }
+  ctx.imageSmoothingEnabled = false
+  ctx.drawImage(source, 0, 0, width, height)
+  return canvasToImage(canvas)
+}
+
 export function fileToImage(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()

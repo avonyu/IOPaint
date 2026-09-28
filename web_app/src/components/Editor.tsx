@@ -88,6 +88,7 @@ export default function Editor(props: EditorProps) {
     setCurRectMask,
     setRectMaskMode,
     addRectToCurLineGroup,
+    isBatchMode,
   ] = useStore((state) => [
     state.disableShortCuts,
     state.windowSize,
@@ -119,6 +120,7 @@ export default function Editor(props: EditorProps) {
     state.setCurRectMask,
     state.setRectMaskMode,
     state.addRectToCurLineGroup,
+    state.isBatchMode(),
   ])
   const baseBrushSize = useStore((state) => state.editorState.baseBrushSize)
   const brushSize = useStore((state) => state.getBrushSize())
@@ -525,7 +527,8 @@ export default function Editor(props: EditorProps) {
       return
     }
 
-    if (runMannually) {
+    // 批量模式下不自动触发单图重绘，mask 保留给“应用到全部”使用
+    if (runMannually || isBatchMode) {
       setIsDraging(false)
       isDragingRef.current = false
     } else {
