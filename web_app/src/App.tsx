@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef } from "react"
 
 import useInputImage from "@/hooks/useInputImage"
-import { keepGUIAlive } from "@/lib/utils"
+import {
+  filesFromDataTransfer,
+  isSupportedImageFile,
+  keepGUIAlive,
+} from "@/lib/utils"
 import { getServerConfig } from "@/lib/api"
 import Header from "@/components/Header"
 import Workspace from "@/components/Workspace"
@@ -10,13 +14,6 @@ import { Toaster } from "./components/ui/toaster"
 import { useStore } from "./lib/states"
 import { useWindowSize } from "react-use"
 
-const SUPPORTED_FILE_TYPE = [
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/bmp",
-  "image/tiff",
-]
 function Home() {
   const [file, updateAppState, setServerConfig, setFile] = useStore((state) => [
     state.file,
@@ -71,33 +68,28 @@ function Home() {
     if (dragCounter.current > 0) return
   }, [])
 
-  const handleDrop = useCallback((event: any) => {
+  const handleDrop = useCallback(async (event: any) => {
     event.preventDefault()
     event.stopPropagation()
-    if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
-      if (event.dataTransfer.files.length > 1) {
-        // setToastState({
-        //   open: true,
-        //   desc: "Please drag and drop only one file",
-        //   state: "error",
-        //   duration: 3000,
-        // })
-      } else {
-        const dragFile = event.dataTransfer.files[0]
-        const fileType = dragFile.type
-        if (SUPPORTED_FILE_TYPE.includes(fileType)) {
-          setFile(dragFile)
-        } else {
-          // setToastState({
-          //   open: true,
-          //   desc: "Please drag and drop an image file",
-          //   state: "error",
-          //   duration: 3000,
-          // })
-        }
-      }
-      event.dataTransfer.clearData()
+    dragCounter.current = 0
+
+    const droppedFiles = await filesFromDataTransfer(event.dataTransfer)
+    const imageFiles = droppedFiles
+      .filter(isSupportedImageFile)
+      .sort((a, b) =>
+        (a.webkitRelativePath || a.name).localeCompare(
+          b.webkitRelativePath || b.name
+        )
+      )
+
+    if (imageFiles.length > 1) {
+      // 拖入多张图片或整个文件夹 → 批量模式（共享 mask）
+      useStore.getState().setBatchFiles(imageFiles)
+    } else if (imageFiles.length === 1) {
+      setFile(imageFiles[0])
     }
+
+    event.dataTransfer.clearData()
   }, [])
 
   const onPaste = useCallback((event: any) => {

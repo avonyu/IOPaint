@@ -78,6 +78,108 @@ export function canvasToImage(
   })
 }
 
+export const SUPPORTED_IMAGE_EXTENSIONS = [
+  "png",
+  "jpg",
+  "jpeg",
+  "webp",
+  "bmp",
+  "tif",
+  "tiff",
+]
+
+/**
+ * 判断是否为受支持的图片。
+ * 注意：通过 webkitdirectory 选择文件夹时，部分浏览器的 File.type 可能为空，
+ * 因此这里同时按扩展名兜底判断。
+ */
+export function isSupportedImageFile(file: File): boolean {
+  if (file.type && file.type.startsWith("image/")) {
+    return true
+  }
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? ""
+  return SUPPORTED_IMAGE_EXTENSIONS.includes(ext)
+}
+
+interface FileSystemEntryLike {
+  isFile: boolean
+  isDirectory: boolean
+  file: (
+    onSuccess: (file: File) => void,
+    onError?: (err: unknown) => void
+  ) => void
+  createReader: () => {
+    readEntries: (
+      onSuccess: (entries: FileSystemEntryLike[]) => void,
+      onError?: (err: unknown) => void
+    ) => void
+  }
+}
+
+function readFileSystemEntry(entry: FileSystemEntryLike): Promise<File[]> {
+  if (entry.isFile) {
+    return new Promise((resolve) => {
+      entry.file(
+        (file) => resolve([file]),
+        () => resolve([])
+      )
+    })
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader()
+    return new Promise((resolve) => {
+      const all: FileSystemEntryLike[] = []
+      const readBatch = () => {
+        reader.readEntries(
+          (results) => {
+            if (results.length === 0) {
+              Promise.all(all.map(readFileSystemEntry))
+                .then((nested) => resolve(nested.flat()))
+                .catch(() => resolve([]))
+            } else {
+              all.push(...results)
+              readBatch()
+            }
+          },
+          () => resolve([])
+        )
+      }
+      readBatch()
+    })
+  }
+  return Promise.resolve([])
+}
+
+/**
+ * 从拖拽事件中解析文件列表，支持拖入整个文件夹（递归）。
+ */
+export async function filesFromDataTransfer(
+  dataTransfer: DataTransfer
+): Promise<File[]> {
+  const items = Array.from(dataTransfer.items || [])
+  const entries: (FileSystemEntryLike | null)[] = items
+    .filter((item) => item.kind === "file")
+    .map((item) => {
+      const getEntry = (
+        item as unknown as {
+          webkitGetAsEntry?: () => FileSystemEntryLike | null
+        }
+      ).webkitGetAsEntry
+      return typeof getEntry === "function" ? getEntry.call(item) : null
+    })
+
+  if (entries.some((entry) => entry)) {
+    const results = await Promise.all(
+      entries.map((entry) =>
+        entry ? readFileSystemEntry(entry) : Promise.resolve([])
+      )
+    )
+    return results.flat()
+  }
+
+  return Array.from(dataTransfer.files || [])
+}
+
 export function getImageFileSize(file: File): Promise<[number, number]> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)

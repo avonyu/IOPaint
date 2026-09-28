@@ -11,7 +11,7 @@ import FileManager, { MASK_TAB } from "./FileManager"
 import { getMediaBlob, getMediaFile } from "@/lib/api"
 import { useStore } from "@/lib/states"
 import SettingsDialog from "./Settings"
-import { cn, fileToImage } from "@/lib/utils"
+import { cn, fileToImage, isSupportedImageFile } from "@/lib/utils"
 import Coffee from "./Coffee"
 import { useToast } from "./ui/use-toast"
 
@@ -52,12 +52,13 @@ const Header = () => {
     state.setBatchFiles,
   ])
 
+  const { toast } = useToast()
   const folderInputRef = useRef<HTMLInputElement>(null)
 
   const onFolderSelected = (ev: ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(ev.currentTarget.files || [])
     const imageFiles = selected
-      .filter((f) => f.type.startsWith("image/"))
+      .filter(isSupportedImageFile)
       .sort((a, b) =>
         (a.webkitRelativePath || a.name).localeCompare(
           b.webkitRelativePath || b.name
@@ -65,12 +66,17 @@ const Header = () => {
       )
     if (imageFiles.length > 0) {
       setBatchFiles(imageFiles)
+    } else {
+      toast({
+        variant: "destructive",
+        description: "No supported images found in the selected folder",
+      })
     }
     ev.currentTarget.value = ""
   }
 
   useEffect(() => {
-    // React 不支持 webkitdirectory 作为 JSX 属性，这里手动设置以启用文件夹选择
+    // 兜底：确保文件夹选择属性一定被设置（部分环境下 JSX 属性可能不生效）
     const el = folderInputRef.current
     if (el) {
       el.setAttribute("webkitdirectory", "")
@@ -78,7 +84,6 @@ const Header = () => {
     }
   }, [])
 
-  const { toast } = useToast()
   const [maskImage, maskImageLoaded] = useImage(customMask)
   const [openMaskPopover, setOpenMaskPopover] = useState(false)
 
@@ -141,8 +146,10 @@ const Header = () => {
         <input
           ref={folderInputRef}
           type="file"
-          accept="image/png, image/jpeg, image/webp, image/bmp, image/tiff"
+          accept="image/*"
           multiple
+          webkitdirectory=""
+          directory=""
           style={{ display: "none" }}
           onChange={onFolderSelected}
         />
