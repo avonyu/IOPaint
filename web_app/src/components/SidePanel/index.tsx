@@ -24,23 +24,27 @@ const SidePanel = () => {
     toggleOpen()
   })
 
+  const modelName = settings.model?.name ?? ""
+
   if (
-    settings.model.name !== LDM &&
-    settings.model.name !== CV2 &&
-    settings.model.model_type === MODEL_TYPE_INPAINT
+    modelName !== LDM &&
+    modelName !== CV2 &&
+    settings.model?.model_type === MODEL_TYPE_INPAINT
   ) {
     return null
   }
 
   const renderSidePanelOptions = () => {
-    if (settings.model.name === LDM) {
+    if (modelName === LDM) {
       return <LDMOptions />
     }
-    if (settings.model.name === CV2) {
+    if (modelName === CV2) {
       return <CV2Options />
     }
     return <DiffusionOptions />
   }
+
+  const displayName = modelName.split("/").pop() || modelName
 
   return (
     <Sheet open={open} modal={false}>
@@ -68,11 +72,7 @@ const SidePanel = () => {
         <SheetHeader>
           <RowContainer>
             <div className="overflow-hidden mr-8">
-              {
-                settings.model.name.split("/")[
-                  settings.model.name.split("/").length - 1
-                ]
-              }
+              {displayName}
             </div>
             <Button
               variant="ghost"
@@ -85,7 +85,7 @@ const SidePanel = () => {
           </RowContainer>
           <Separator />
         </SheetHeader>
-        <ScrollArea style={{ height: windowSize.height - 160 }}>
+        <ScrollArea style={{ height: (windowSize?.height ?? window.innerHeight) - 160 }}>
           {renderSidePanelOptions()}
         </ScrollArea>
       </SheetContent>
