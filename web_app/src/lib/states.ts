@@ -256,7 +256,6 @@ type AppAction = {
   redoDisabled: () => boolean
 
   // 矩形重绘区域
-  toggleRectMaskMode: () => void
   setRectMaskMode: (value: boolean) => void
   setCurRectMask: (rect: Rect | null) => void
   addRectToCurLineGroup: (rect: Rect) => void
@@ -1207,16 +1206,6 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
       },
 
       // 矩形重绘区域模式
-      toggleRectMaskMode: () => {
-        set((state) => {
-          state.rectMaskMode = !state.rectMaskMode
-          // 退出矩形模式时清掉当前正在绘制的矩形预览
-          if (!state.rectMaskMode) {
-            state.curRectMask = null
-          }
-        })
-      },
-
       setRectMaskMode: (value: boolean) => {
         set((state) => {
           state.rectMaskMode = value
@@ -1256,25 +1245,13 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         if (rect.width < 4 || rect.height < 4) {
           return
         }
-        const { imageWidth, imageHeight } = get()
-        const x = Math.max(0, Math.min(rect.x, imageWidth))
-        const y = Math.max(0, Math.min(rect.y, imageHeight))
-        const right = Math.max(
-          0,
-          Math.min(rect.x + rect.width, imageWidth)
-        )
-        const bottom = Math.max(
-          0,
-          Math.min(rect.y + rect.height, imageHeight)
-        )
-        if (right - x > 0 && bottom - y > 0) {
-          get().addRectToCurLineGroup({
-            x,
-            y,
-            width: right - x,
-            height: bottom - y,
-          })
-        }
+        // 允许矩形超出图片范围，直接写入 mask（超出部分在生成 mask 时会被画布裁剪）
+        get().addRectToCurLineGroup({
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        })
       },
 
       // 批量图片（共享 mask）

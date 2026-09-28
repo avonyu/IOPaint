@@ -21,15 +21,13 @@ interface EVData {
 }
 
 interface EditorProps {
-  imageWidth: number
-  imageHeight: number
   scale: number
   /** 正在拖拽绘制中：仅显示虚线框，不响应移动/缩放 */
   drawing: boolean
 }
 
 export const RectMaskEditor = (props: EditorProps) => {
-  const { imageWidth, imageHeight, scale, drawing } = props
+  const { scale, drawing } = props
   const [rect, setRect] = useStore((state) => [
     state.curRectMask,
     state.setCurRectMask,
@@ -47,20 +45,13 @@ export const RectMaskEditor = (props: EditorProps) => {
     ord: "",
   })
 
-  const clampRect = (x: number, y: number, w: number, h: number) => {
-    let nw = Math.max(MIN_SIZE, w)
-    let nh = Math.max(MIN_SIZE, h)
-    if (nw > imageWidth) nw = imageWidth
-    if (nh > imageHeight) nh = imageHeight
-    const nx = Math.min(Math.max(0, x), Math.max(0, imageWidth - nw))
-    const ny = Math.min(Math.max(0, y), Math.max(0, imageHeight - nh))
-    return {
-      x: Math.round(nx),
-      y: Math.round(ny),
-      width: Math.round(nw),
-      height: Math.round(nh),
-    }
-  }
+  // 允许矩形超出图片范围：这里只保证最小尺寸
+  const clampRect = (x: number, y: number, w: number, h: number) => ({
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(Math.max(MIN_SIZE, w)),
+    height: Math.round(Math.max(MIN_SIZE, h)),
+  })
 
   const onPointerMove = (e: PointerEvent) => {
     if (!rect) {
@@ -175,7 +166,7 @@ export const RectMaskEditor = (props: EditorProps) => {
   }
 
   return (
-    <div className="absolute h-full w-full overflow-hidden pointer-events-none z-[3]">
+    <div className="absolute h-full w-full pointer-events-none z-[3]">
       <div
         className={cn(
           "absolute",

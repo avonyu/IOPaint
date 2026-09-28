@@ -6,7 +6,7 @@ import { useImage } from "@/hooks/useImage"
 
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover"
 import PromptInput from "./PromptInput"
-import { RotateCw, Image, Upload, FolderOpen } from "lucide-react"
+import { Image, Upload, FolderOpen, Undo, Redo } from "lucide-react"
 import FileManager, { MASK_TAB } from "./FileManager"
 import { getMediaBlob, getMediaFile } from "@/lib/api"
 import { useStore } from "@/lib/states"
@@ -27,12 +27,14 @@ const Header = () => {
     setFile,
     setCustomFile,
     runInpainting,
-    showPrevMask,
-    hidePrevMask,
     imageHeight,
     imageWidth,
     handleFileManagerMaskSelect,
     setBatchFiles,
+    undo,
+    redo,
+    undoDisabled,
+    redoDisabled,
   ] = useStore((state) => [
     state.file,
     state.customMask,
@@ -44,12 +46,14 @@ const Header = () => {
     state.setFile,
     state.setCustomFile,
     state.runInpainting,
-    state.showPrevMask,
-    state.hidePrevMask,
     state.imageHeight,
     state.imageWidth,
     state.handleFileManagerMaskSelect,
     state.setBatchFiles,
+    state.undo,
+    state.redo,
+    state.undoDisabled(),
+    state.redoDisabled(),
   ])
 
   const { toast } = useToast()
@@ -87,17 +91,6 @@ const Header = () => {
   const [maskImage, maskImageLoaded] = useImage(customMask)
   const [openMaskPopover, setOpenMaskPopover] = useState(false)
 
-  const handleRerunLastMask = () => {
-    runInpainting()
-  }
-
-  const onRerunMouseEnter = () => {
-    showPrevMask()
-  }
-
-  const onRerunMouseLeave = () => {
-    hidePrevMask()
-  }
 
   const handleOnPhotoClick = async (tab: string, filename: string) => {
     try {
@@ -120,6 +113,20 @@ const Header = () => {
   return (
     <header className="h-[60px] px-6 py-4 absolute top-[0] flex justify-between items-center w-full z-20 border-b backdrop-filter backdrop-blur-md bg-background/70">
       <div className="flex items-center gap-1">
+        <IconButton
+          disabled={undoDisabled}
+          tooltip="Undo"
+          onClick={() => undo()}
+        >
+          <Undo />
+        </IconButton>
+        <IconButton
+          disabled={redoDisabled}
+          tooltip="Redo"
+          onClick={() => redo()}
+        >
+          <Redo />
+        </IconButton>
         {serverConfig.enableFileManager ? (
           <FileManager photoWidth={512} onPhotoClick={handleOnPhotoClick} />
         ) : (
@@ -226,19 +233,6 @@ const Header = () => {
           )}
         </div>
 
-        {file && !model.need_prompt ? (
-          <IconButton
-            disabled={isInpainting}
-            tooltip="Rerun previous mask"
-            onClick={handleRerunLastMask}
-            onMouseEnter={onRerunMouseEnter}
-            onMouseLeave={onRerunMouseLeave}
-          >
-            <RotateCw />
-          </IconButton>
-        ) : (
-          <></>
-        )}
       </div>
 
       {model.need_prompt ? <PromptInput /> : <></>}

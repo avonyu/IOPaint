@@ -62,10 +62,11 @@ Button.displayName = "Button"
 
 export interface IconButtonProps extends ButtonProps {
   tooltip: string
+  tooltipSide?: "top" | "right" | "bottom" | "left"
 }
 
 const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
-  ({ tooltip, children, ...rest }, ref) => {
+  ({ tooltip, tooltipSide, children, className, ...rest }, ref) => {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -75,12 +76,16 @@ const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
             {...rest}
             ref={ref}
             tabIndex={-1}
-            className="cursor-default bg-background"
+            className={cn("cursor-default bg-background", className)}
           >
             <div className="icon-button-icon-wrapper">{children}</div>
           </Button>
         </TooltipTrigger>
-        <TooltipContent>
+        <TooltipContent
+          side={tooltipSide}
+          // 显式指定侧边时禁用碰撞翻转，保证始终显示在指定位置（如工具栏左侧）
+          avoidCollisions={!tooltipSide}
+        >
           <p>{tooltip}</p>
         </TooltipContent>
       </Tooltip>
