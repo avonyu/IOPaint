@@ -22,4 +22,4 @@ easydict
 gradio==4.21.0
 typer-config==1.4.0
 
-Pillow==9.5.0 # for AnyText
+Pillow>=10.4.0 # for AnyText (upgraded for Python 3.13 / new setuptools compatibility)

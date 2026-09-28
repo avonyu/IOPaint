@@ -1,5 +1,17 @@
 import base64
-import imghdr
+try:
+    import imghdr
+except ModuleNotFoundError:
+    # imghdr was removed in Python 3.13; provide a minimal stub.
+    import sys as _sys
+
+    class _ImghdrStub:
+        @staticmethod
+        def what(file, h=None):
+            return None
+
+    imghdr = _ImghdrStub()
+    _sys.modules["imghdr"] = imghdr
 import io
 import os
 import sys

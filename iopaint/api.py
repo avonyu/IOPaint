@@ -171,7 +171,13 @@ class Api:
         self.add_api_route("/api/v1/samplers", self.api_samplers, methods=["GET"])
         self.add_api_route("/api/v1/adjust_mask", self.api_adjust_mask, methods=["POST"])
         self.add_api_route("/api/v1/save_image", self.api_save_image, methods=["POST"])
-        self.app.mount("/", StaticFiles(directory=WEB_APP_DIR, html=True), name="assets")
+        if WEB_APP_DIR.is_dir():
+            self.app.mount("/", StaticFiles(directory=WEB_APP_DIR, html=True), name="assets")
+        else:
+            logger.warning(
+                f"Web app directory {WEB_APP_DIR} does not exist; "
+                "skipping static mount. API endpoints are still available."
+            )
         # fmt: on
 
         global global_sio
