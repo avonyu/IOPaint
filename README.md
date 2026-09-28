@@ -117,7 +117,7 @@ npm run build
 cp -r dist/ ../iopaint/web_app
 ```
 
-Create a `.env.local` file in `web_app` and fill in the backend IP and port.
+Copy `.env.local` file to `.env` in `web_app` and uncomment the backend IP and port.
 ```
 VITE_BACKEND=http://127.0.0.1:8080
 ```
@@ -129,8 +129,8 @@ npm run dev
 
 Install back-end requirements and start backend service
 ```bash
-pip install -r requirements.txt
-python3 main.py start --model lama --port 8080
+uv sync
+uv run python main.py start --model lama --port 8080
 ```
 
 Then you can visit `http://localhost:5173/` for development.

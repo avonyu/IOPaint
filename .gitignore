@@ -10,3 +10,5 @@ IOPaint.egg-info/
 venv/
 tmp/
 iopaint/web_app/
+.venv/
+web_app/.env
