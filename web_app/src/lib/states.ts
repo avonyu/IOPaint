@@ -142,11 +142,10 @@ type BatchState = {
   isProcessing: boolean
   processedCount: number
   totalCount: number
-  // 批量处理时矩形区域相对图片的锚点
-  anchor: BatchAnchor
   // 批量处理结果（与服务端缓存对应，用于预览与打包下载）
+  // 按源图片索引对齐，跳过/失败的图片为 null
   batchId: string | null
-  results: BatchResult[]
+  results: (BatchResult | null)[]
   showResult: boolean
 }
 
@@ -185,6 +184,9 @@ type AppState = {
   interactiveSegState: InteractiveSegState
   fileManagerState: FileManagerState
   batchState: BatchState
+
+  // 批量处理时矩形区域相对图片的锚点（记住用户上次的选择，持久化保存）
+  batchAnchor: BatchAnchor
 
   cropperState: CropperState
   extenderState: CropperState
@@ -287,7 +289,8 @@ type AppAction = {
     height: number
   ) => Promise<void>
   batchInpaintAll: () => Promise<void>
-  setBatchShowResult: (value: boolean) => void
+  setBatchShowResult: (value: boolean) => Promise<void>
+  applyBatchResultView: () => Promise<void>
   downloadBatchZip: () => Promise<void>
 
   adjustMask: (operate: AdjustMaskOperate) => Promise<void>
@@ -363,11 +366,12 @@ const defaultValues: AppState = {
     isProcessing: false,
     processedCount: 0,
     totalCount: 0,
-    anchor: "topleft",
     batchId: null,
     results: [],
     showResult: false,
   },
+
+  batchAnchor: "topleft",
 
   serverConfig: {
     plugins: [],
@@ -1019,6 +1023,8 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
             })
           }
         }
+        // 载入单张图片会退出批量模式（释放批量结果预览 URL）
+        get().batchState.results.forEach((r) => r && URL.revokeObjectURL(r.url))
         set((state) => {
           state.file = file
           state.interactiveSegState = castDraft(
@@ -1028,6 +1034,7 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
           state.cropperState = defaultValues.cropperState
           state.rectMaskMode = false
           state.curRectMask = null
+          state.batchState = castDraft(defaultValues.batchState)
         })
       },
 
@@ -1276,26 +1283,30 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
 
       // 批量图片（共享 mask）
       isBatchMode: (): boolean => {
-        return get().batchState.files.length > 0
+        // 仅多张图片才算批量模式
+        return get().batchState.files.length > 1
       },
 
       setBatchFiles: async (files: File[]) => {
         if (files.length === 0) {
           return
         }
+        // 先按普通方式载入第一张（会重置编辑器与批量状态）
+        await get().setFile(files[0])
         set((state) => {
           state.batchState.files = castDraft(files)
           state.batchState.names = files.map((f) => f.name)
           state.batchState.currentIndex = 0
           state.batchState.processedCount = 0
           state.batchState.totalCount = files.length
+          state.batchState.batchId = null
+          state.batchState.results = []
+          state.batchState.showResult = false
         })
-        // 载入第一张图片（会重置编辑器状态）
-        await get().setFile(files[0])
       },
 
       clearBatch: () => {
-        get().batchState.results.forEach((r) => URL.revokeObjectURL(r.url))
+        get().batchState.results.forEach((r) => r && URL.revokeObjectURL(r.url))
         set((state) => {
           state.batchState = castDraft(defaultValues.batchState)
         })
@@ -1325,7 +1336,7 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
 
         // 按锚点把共享 mask 平移到目标图片（只平移、不按比例缩放）
         if (fromWidth > 0 && fromHeight > 0 && toWidth > 0 && toHeight > 0) {
-          const anchor = batchState.anchor
+          const anchor = get().batchAnchor
           const dx =
             anchor === "topright" || anchor === "bottomright"
               ? toWidth - fromWidth
@@ -1359,11 +1370,13 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         if (toWidth > 0 && toHeight > 0) {
           get().setImageSize(toWidth, toHeight)
         }
+        // 切换图片后按当前视图显示原图/结果
+        await get().applyBatchResultView()
       },
 
       setBatchAnchor: (anchor: BatchAnchor) => {
         set((state) => {
-          state.batchState.anchor = anchor
+          state.batchAnchor = anchor
         })
       },
 
@@ -1454,7 +1467,7 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         }
 
         // 释放上一次结果的预览 URL
-        get().batchState.results.forEach((r) => URL.revokeObjectURL(r.url))
+        get().batchState.results.forEach((r) => r && URL.revokeObjectURL(r.url))
 
         set((state) => {
           state.batchState.isProcessing = true
@@ -1485,27 +1498,41 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
             maskBase64,
             imageWidth,
             imageHeight,
-            batchState.anchor,
+            get().batchAnchor,
             settings,
             cropperState,
             extenderState
           )
 
-          const newResults = results.map((r) => ({
-            name: r.name,
-            url: URL.createObjectURL(dataURItoBlob(r.image)),
-          }))
+          // 按源图片索引对齐结果
+          const aligned: (BatchResult | null)[] = new Array(
+            batchState.files.length
+          ).fill(null)
+          results.forEach((r, i) => {
+            // 兼容旧后端：没有 index 字段时按顺序回退
+            const idx = typeof r.index === "number" ? r.index : i
+            if (idx >= 0 && idx < aligned.length) {
+              aligned[idx] = {
+                name: r.name,
+                url: URL.createObjectURL(dataURItoBlob(r.image)),
+              }
+            }
+          })
+          const okCount = aligned.filter(Boolean).length
 
           set((state) => {
             state.batchState.batchId = batchId
-            state.batchState.results = castDraft(newResults)
+            state.batchState.results = castDraft(aligned)
             // 处理完成后默认显示结果
-            state.batchState.showResult = newResults.length > 0
+            state.batchState.showResult = okCount > 0
             state.batchState.isProcessing = false
           })
 
+          // 把当前图片的结果同步到渲染通道，否则结果视图下仍显示原图
+          await get().applyBatchResultView()
+
           toast({
-            description: `Batch inpainting finished (${newResults.length} images)`,
+            description: `Batch inpainting finished (${okCount} images)`,
           })
         } catch (e: any) {
           toast({
@@ -1518,10 +1545,35 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         }
       },
 
-      setBatchShowResult: (value: boolean) => {
+      setBatchShowResult: async (value: boolean) => {
         set((state) => {
           state.batchState.showResult = value
         })
+        await get().applyBatchResultView()
+      },
+
+      /**
+       * 把当前图片的批量结果同步到 editorState.renders，
+       * 复用与单图擦除完全一致的显示通道（图片画布渲染 renders）。
+       */
+      applyBatchResultView: async () => {
+        const { showResult, results, currentIndex } = get().batchState
+        const result = results[currentIndex]
+        if (!showResult || !result) {
+          set((state) => {
+            state.editorState.renders = []
+          })
+          return
+        }
+        try {
+          const img = new Image()
+          await loadImage(img, result.url)
+          set((state) => {
+            state.editorState.renders = castDraft([img])
+          })
+        } catch (e) {
+          console.error("Failed to load batch result image", e)
+        }
       },
 
       downloadBatchZip: async () => {
@@ -1557,7 +1609,7 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
       partialize: (state) =>
         Object.fromEntries(
           Object.entries(state).filter(([key]) =>
-            ["fileManagerState", "settings"].includes(key)
+            ["fileManagerState", "settings", "batchAnchor"].includes(key)
           )
         ),
     }

@@ -134,7 +134,13 @@ export default function Editor(props: EditorProps) {
   const batchIndex = useStore((state) => state.batchState.currentIndex)
   const batchShowResult = useStore((state) => state.batchState.showResult)
   const batchId = useStore((state) => state.batchState.batchId)
-  const downloadBatchZip = useStore((state) => state.downloadBatchZip);
+  const downloadBatchZip = useStore((state) => state.downloadBatchZip)
+
+  // 批量结果视图：当前图片有处理结果且开启了“结果”视图
+  const batchResultUrl =
+    isBatchMode && batchShowResult && batchResults[batchIndex]
+      ? batchResults[batchIndex]!.url
+      : null;
 
   // Local State
   const [showOriginal, setShowOriginal] = useState(false);
@@ -932,6 +938,8 @@ export default function Editor(props: EditorProps) {
                 cursor: getCursor(),
                 clipPath: `inset(0 ${sliderPos}% 0 0)`,
                 transition: `clip-path ${COMPARE_SLIDER_DURATION_MS}ms`,
+                // 结果视图下隐藏 mask 图层，确保处理结果清晰可见
+                visibility: batchResultUrl ? "hidden" : "visible",
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -957,19 +965,6 @@ export default function Editor(props: EditorProps) {
                 }
               }}
             />
-            {isBatchMode && batchShowResult && batchResults[batchIndex] ? (
-              <img
-                className="[grid-area:editor-content] pointer-events-none"
-                src={batchResults[batchIndex].url}
-                alt="batch result"
-                style={{
-                  width: `${imageWidth}px`,
-                  height: `${imageHeight}px`,
-                }}
-              />
-            ) : (
-              <></>
-            )}
             <div
               className="[grid-area:editor-content] pointer-events-none grid [grid-template-areas:'original-image-content']"
               style={{
@@ -1016,7 +1011,7 @@ export default function Editor(props: EditorProps) {
             show={settings.showExtender}
           />
 
-          {rectMaskMode ? (
+          {rectMaskMode && !batchResultUrl ? (
             <RectMaskEditor
               scale={getCurScale()}
               drawing={isRectDrawingRef.current}

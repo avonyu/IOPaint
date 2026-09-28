@@ -477,6 +477,7 @@ class BatchInpaintRequest(BaseModel):
 
 
 class BatchResultItem(BaseModel):
+    index: int = Field(0, description="Index of the source image in the request")
     name: str = Field(..., description="Result file name")
     image: str = Field(..., description="base64 encoded result image")
 

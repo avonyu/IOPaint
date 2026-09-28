@@ -1,29 +1,56 @@
 import { useEffect, useState } from "react"
-import { ChevronLeft, ChevronRight, Layers, X } from "lucide-react"
+import {
+  ArrowDownLeft,
+  ArrowDownRight,
+  ArrowUpLeft,
+  ArrowUpRight,
+  ChevronLeft,
+  ChevronRight,
+  Layers,
+} from "lucide-react"
 import { Button, IconButton } from "./ui/button"
 import { useStore } from "@/lib/states"
 import { socket } from "@/lib/socket"
+import { BatchAnchor } from "@/lib/types"
+
+// 点击循环切换的顺序（顺时针）
+const ANCHOR_ORDER: BatchAnchor[] = [
+  "topleft",
+  "topright",
+  "bottomright",
+  "bottomleft",
+]
+
+const ANCHOR_META: Record<
+  BatchAnchor,
+  { label: string; Icon: typeof ArrowUpLeft }
+> = {
+  topleft: { label: "Top-left", Icon: ArrowUpLeft },
+  topright: { label: "Top-right", Icon: ArrowUpRight },
+  bottomright: { label: "Bottom-right", Icon: ArrowDownRight },
+  bottomleft: { label: "Bottom-left", Icon: ArrowDownLeft },
+}
 
 /**
  * 批量图片控制（集成在 Header 中）：
- * 切换浏览、应用到全部、切换显示结果/原图、清空。
+ * 切换浏览、应用到全部、切换区域锚点。
  * 结果下载走右侧工具栏的下载按钮。
  */
 const BatchControls = () => {
   const [
     batchState,
+    batchAnchor,
     isProcessing,
     switchBatchIndex,
     batchInpaintAll,
-    setBatchShowResult,
-    clearBatch,
+    setBatchAnchor,
   ] = useStore((state) => [
     state.batchState,
+    state.batchAnchor,
     state.getIsProcessing(),
     state.switchBatchIndex,
     state.batchInpaintAll,
-    state.setBatchShowResult,
-    state.clearBatch,
+    state.setBatchAnchor,
   ])
 
   const [progress, setProgress] = useState({ current: 0, total: 0 })
@@ -45,7 +72,8 @@ const BatchControls = () => {
     }
   }, [])
 
-  if (batchState.files.length === 0) {
+  // 仅在导入多张图片（批量）时显示
+  if (batchState.files.length <= 1) {
     return null
   }
 
@@ -54,10 +82,14 @@ const BatchControls = () => {
     names,
     files,
     isProcessing: isBatchProcessing,
-    results,
-    showResult,
   } = batchState
   const busy = isBatchProcessing || isProcessing
+
+  const anchorMeta = ANCHOR_META[batchAnchor]
+  const nextAnchor =
+    ANCHOR_ORDER[
+      (ANCHOR_ORDER.indexOf(batchAnchor) + 1) % ANCHOR_ORDER.length
+    ]
 
   return (
     <div className="flex items-center gap-1">
@@ -98,19 +130,12 @@ const BatchControls = () => {
           : "应用到全部"}
       </Button>
 
-      {results.length > 0 ? (
-        <Button
-          size="sm"
-          variant={showResult ? "default" : "secondary"}
-          className="h-7"
-          onClick={() => setBatchShowResult(!showResult)}
-        >
-          {showResult ? "显示结果" : "显示原图"}
-        </Button>
-      ) : null}
-
-      <IconButton tooltip="Clear batch" disabled={busy} onClick={clearBatch}>
-        <X />
+      <IconButton
+        tooltip={`Region anchor: ${anchorMeta.label} (click to change)`}
+        disabled={busy}
+        onClick={() => setBatchAnchor(nextAnchor)}
+      >
+        <anchorMeta.Icon />
       </IconButton>
     </div>
   )

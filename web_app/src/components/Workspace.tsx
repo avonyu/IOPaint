@@ -7,7 +7,6 @@ import Plugins from "./Plugins"
 import { InteractiveSeg } from "./InteractiveSeg"
 import SidePanel from "./SidePanel"
 import DiffusionProgress from "./DiffusionProgress"
-import BatchAnchorPanel from "./BatchAnchorPanel"
 
 const Workspace = () => {
   const [file, updateSettings] = useStore((state) => [
@@ -31,7 +30,6 @@ const Workspace = () => {
       </div>
       <InteractiveSeg />
       <DiffusionProgress />
-      <BatchAnchorPanel />
       <SidePanel />
       {file ? <Editor file={file} /> : <></>}
     </>

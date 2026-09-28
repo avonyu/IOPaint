@@ -132,7 +132,10 @@ export async function batchInpaint(
   settings: Settings,
   croperRect: Rect,
   extenderState: Rect
-): Promise<{ batchId: string; results: { name: string; image: string }[] }> {
+): Promise<{
+  batchId: string
+  results: { index: number; name: string; image: string }[]
+}> {
   const res = await fetch(`${API_ENDPOINT}/batch_inpaint`, {
     method: "POST",
     headers: {

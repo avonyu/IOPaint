@@ -439,6 +439,7 @@ class Api:
             files[file_name] = img_bytes
             results.append(
                 BatchResultItem(
+                    index=index,
                     name=file_name,
                     image="data:image/png;base64,"
                     + base64.b64encode(img_bytes).decode(),
