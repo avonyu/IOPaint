@@ -15,13 +15,23 @@ import {
   copyCanvasImage,
   downloadImage,
   drawLines,
+  fillRect,
   generateMask,
   isMidClick,
   isRightClick,
   mouseXY,
   srcToFile,
 } from "@/lib/utils"
-import { Eraser, Eye, Redo, Undo, Expand, Download } from "lucide-react"
+import {
+  Eraser,
+  Eye,
+  Redo,
+  Undo,
+  Expand,
+  Download,
+  Square,
+  Brush,
+} from "lucide-react"
 import { useImage } from "@/hooks/useImage"
 import { Slider } from "./ui/slider"
 import { PluginName } from "@/lib/types"
@@ -72,6 +82,12 @@ export default function Editor(props: EditorProps) {
     isCropperExtenderResizing,
     decreaseBaseBrushSize,
     increaseBaseBrushSize,
+    rectMaskMode,
+    curRectMask,
+    toggleRectMaskMode,
+    setCurRectMask,
+    setRectMaskMode,
+    addRectToCurLineGroup,
   ] = useStore((state) => [
     state.disableShortCuts,
     state.windowSize,
@@ -97,6 +113,12 @@ export default function Editor(props: EditorProps) {
     state.isCropperExtenderResizing,
     state.decreaseBaseBrushSize,
     state.increaseBaseBrushSize,
+    state.rectMaskMode,
+    state.curRectMask,
+    state.toggleRectMaskMode,
+    state.setCurRectMask,
+    state.setRectMaskMode,
+    state.addRectToCurLineGroup,
   ])
   const baseBrushSize = useStore((state) => state.editorState.baseBrushSize)
   const brushSize = useStore((state) => state.getBrushSize())
@@ -126,14 +148,24 @@ export default function Editor(props: EditorProps) {
   const [initialCentered, setInitialCentered] = useState(false)
 
   const [isDraging, setIsDraging] = useState(false)
+  // 使用 ref 同步追踪是否正在拖拽，避免 React 闭包陷阱：
+  // onMouseDown 设置 isDraging=true，但在同一个事件循环中触发的 onPointerUp
+  // 闭包内仍然看到旧的 isDraging=false，导致单击不移动画笔时无法触发重绘。
+  const isDragingRef = useRef(false)
+
+  // 矩形绘制状态
+  const rectStartRef = useRef<{ x: number; y: number } | null>(null)
+  const isRectDrawingRef = useRef(false)
 
   const [sliderPos, setSliderPos] = useState<number>(0)
   const [isChangingBrushSizeByWheel, setIsChangingBrushSizeByWheel] =
     useState<boolean>(false)
 
   const hadDrawSomething = useCallback(() => {
-    return curLineGroup.length !== 0
-  }, [curLineGroup])
+    // 直接从 store 读取最新值，避免闭包陷阱（onMouseDown 触发的 setState
+    // 在 onPointerUp 同步执行时尚未反映到组件订阅的 curLineGroup 上）
+    return useStore.getState().editorState.curLineGroup.length !== 0
+  }, [])
 
   useEffect(() => {
     if (
@@ -196,6 +228,11 @@ export default function Editor(props: EditorProps) {
       )
     }
     drawLines(context, curLineGroup)
+
+    // 绘制当前正在拖拽的矩形预览（在 mask canvas 上同样以填充方式呈现）
+    if (curRectMask && curRectMask.width > 0 && curRectMask.height > 0) {
+      fillRect(context, curRectMask)
+    }
   }, [
     temporaryMasks,
     extraMasks,
@@ -205,6 +242,7 @@ export default function Editor(props: EditorProps) {
     curLineGroup,
     imageHeight,
     imageWidth,
+    curRectMask,
   ])
 
   const getCurrentRender = useCallback(async () => {
@@ -338,8 +376,18 @@ export default function Editor(props: EditorProps) {
       return
     }
 
-    if (isDraging) {
+    if (rectMaskMode) {
+      // 矩形模式下按 Esc 退出矩形模式，并取消正在绘制的预览
+      isRectDrawingRef.current = false
+      rectStartRef.current = null
+      setCurRectMask(null)
+      setRectMaskMode(false)
+      return
+    }
+
+    if (isDraging || isDragingRef.current) {
       setIsDraging(false)
+      isDragingRef.current = false
     } else {
       resetZoom()
     }
@@ -348,6 +396,7 @@ export default function Editor(props: EditorProps) {
   useHotKey("Escape", handleEscPressed, [
     isDraging,
     isInpainting,
+    rectMaskMode,
     resetZoom,
     // drawOnCurrentRender,
   ])
@@ -368,6 +417,19 @@ export default function Editor(props: EditorProps) {
     if (isPanning) {
       return
     }
+
+    // 矩形模式：实时更新矩形预览
+    if (rectMaskMode && isRectDrawingRef.current && rectStartRef.current) {
+      const cur = mouseXY(ev)
+      const start = rectStartRef.current
+      const x = Math.min(start.x, cur.x)
+      const y = Math.min(start.y, cur.y)
+      const width = Math.abs(cur.x - start.x)
+      const height = Math.abs(cur.y - start.y)
+      setCurRectMask({ x, y, width, height })
+      return
+    }
+
     if (!isDraging) {
       return
     }
@@ -409,6 +471,37 @@ export default function Editor(props: EditorProps) {
       setIsPanning(false)
       return
     }
+
+    // 矩形模式：拖拽结束，将矩形固化到 curLineGroup（作为填充 mask）
+    if (rectMaskMode && isRectDrawingRef.current && curRectMask) {
+      isRectDrawingRef.current = false
+      rectStartRef.current = null
+      const finalRect = curRectMask
+      // 清除预览，避免影响 mask canvas 渲染（mask canvas 也会渲染 curLineGroup）
+      setCurRectMask(null)
+      // 忽略过小的矩形（避免误触）
+      if (finalRect.width < 4 || finalRect.height < 4) {
+        return
+      }
+      // 计算真实矩形（处理反向拖拽与超出图片边界）
+      const x = Math.max(0, finalRect.x)
+      const y = Math.max(0, finalRect.y)
+      const right = Math.min(imageWidth, finalRect.x + finalRect.width)
+      const bottom = Math.min(imageHeight, finalRect.y + finalRect.height)
+      const width = Math.max(0, right - x)
+      const height = Math.max(0, bottom - y)
+      if (width === 0 || height === 0) {
+        return
+      }
+      // 写入 curLineGroup，让后续 render / mask 生成 / undo / redo 与 brush 一致
+      addRectToCurLineGroup({ x, y, width, height })
+      // 触发一次自动 inpainting 或等待手动触发
+      if (!runMannually) {
+        runInpainting()
+      }
+      return
+    }
+
     if (!hadDrawSomething()) {
       return
     }
@@ -428,12 +521,13 @@ export default function Editor(props: EditorProps) {
     if (isInpainting) {
       return
     }
-    if (!isDraging) {
+    if (!isDraging && !isDragingRef.current) {
       return
     }
 
     if (runMannually) {
       setIsDraging(false)
+      isDragingRef.current = false
     } else {
       runInpainting()
     }
@@ -480,7 +574,17 @@ export default function Editor(props: EditorProps) {
       return
     }
 
+    // 矩形模式：记录起点，拖拽过程实时预览
+    if (rectMaskMode) {
+      const xy = mouseXY(ev)
+      rectStartRef.current = xy
+      isRectDrawingRef.current = true
+      setCurRectMask({ x: xy.x, y: xy.y, width: 0, height: 0 })
+      return
+    }
+
     setIsDraging(true)
+    isDragingRef.current = true
     handleCanvasMouseDown(mouseXY(ev))
   }
 
@@ -591,11 +695,14 @@ export default function Editor(props: EditorProps) {
     if (isPanning) {
       return "grab"
     }
+    if (rectMaskMode) {
+      return "crosshair"
+    }
     if (showBrush) {
       return "none"
     }
     return undefined
-  }, [showBrush, isPanning, isProcessing])
+  }, [showBrush, isPanning, isProcessing, rectMaskMode])
 
   useHotKey(
     "[",
@@ -920,6 +1027,7 @@ export default function Editor(props: EditorProps) {
       {showBrush &&
         !isInpainting &&
         !isPanning &&
+        !rectMaskMode &&
         (interactiveSegState.isInteractiveSeg
           ? renderInteractiveSegCursor()
           : renderBrush(getBrushStyle(x, y)))}
@@ -927,17 +1035,19 @@ export default function Editor(props: EditorProps) {
       {showRefBrush && renderBrush(getBrushStyle(windowCenterX, windowCenterY))}
 
       <div className="fixed flex bottom-5 border px-4 py-2 rounded-[3rem] gap-8 items-center justify-center backdrop-filter backdrop-blur-md bg-background/70">
-        <Slider
-          className="w-48"
-          defaultValue={[50]}
-          min={MIN_BRUSH_SIZE}
-          max={MAX_BRUSH_SIZE}
-          step={1}
-          tabIndex={-1}
-          value={[baseBrushSize]}
-          onValueChange={(vals) => handleSliderChange(vals[0])}
-          onClick={() => setShowRefBrush(false)}
-        />
+        {!rectMaskMode && (
+          <Slider
+            className="w-48"
+            defaultValue={[50]}
+            min={MIN_BRUSH_SIZE}
+            max={MAX_BRUSH_SIZE}
+            step={1}
+            tabIndex={-1}
+            value={[baseBrushSize]}
+            onValueChange={(vals) => handleSliderChange(vals[0])}
+            onClick={() => setShowRefBrush(false)}
+          />
+        )}
         <div className="flex gap-2">
           <IconButton
             tooltip="Reset zoom & pan"
@@ -991,6 +1101,24 @@ export default function Editor(props: EditorProps) {
             onClick={download}
           >
             <Download />
+          </IconButton>
+
+          <IconButton
+            tooltip={
+              rectMaskMode
+                ? "Rectangle mode (click to switch to brush)"
+                : "Brush mode (click to switch to rectangle)"
+            }
+            className={cn(
+              rectMaskMode &&
+                "bg-primary text-primary-foreground hover:bg-primary/90"
+            )}
+            disabled={isProcessing || !original.src}
+            onClick={() => {
+              toggleRectMaskMode()
+            }}
+          >
+            {rectMaskMode ? <Square /> : <Brush />}
           </IconButton>
 
           {settings.enableManualInpainting &&

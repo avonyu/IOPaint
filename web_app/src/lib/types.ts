@@ -106,6 +106,9 @@ export interface Point {
 export interface Line {
   size?: number
   pts: Point[]
+  // 当 isRect 为 true 时，pts[0] 视为矩形左上角，pts[1] 视为右下角，
+  // 以填充方式作为 inpainting mask 使用。
+  isRect?: boolean
 }
 
 export type LineGroup = Array<Line>

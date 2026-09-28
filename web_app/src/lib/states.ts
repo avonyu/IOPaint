@@ -14,6 +14,7 @@ import {
   PluginParams,
   Point,
   PowerPaintTask,
+  Rect,
   ServerConfig,
   Size,
   SortBy,
@@ -158,6 +159,10 @@ type AppState = {
   extenderState: CropperState
   isCropperExtenderResizing: boolean
 
+  // 矩形重绘区域模式
+  rectMaskMode: boolean
+  curRectMask: Rect | null
+
   serverConfig: ServerConfig
 
   settings: Settings
@@ -232,6 +237,12 @@ type AppAction = {
   undoDisabled: () => boolean
   redoDisabled: () => boolean
 
+  // 矩形重绘区域
+  toggleRectMaskMode: () => void
+  setRectMaskMode: (value: boolean) => void
+  setCurRectMask: (rect: Rect | null) => void
+  addRectToCurLineGroup: (rect: Rect) => void
+
   adjustMask: (operate: AdjustMaskOperate) => Promise<void>
   clearMask: () => void
 }
@@ -285,6 +296,9 @@ const defaultValues: AppState = {
     height: 512,
   },
   isCropperExtenderResizing: false,
+
+  rectMaskMode: false,
+  curRectMask: null,
 
   fileManagerState: {
     sortBy: SortBy.CTIME,
@@ -947,6 +961,8 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
           )
           state.editorState = castDraft(defaultValues.editorState)
           state.cropperState = defaultValues.cropperState
+          state.rectMaskMode = false
+          state.curRectMask = null
         })
       },
 
@@ -1140,6 +1156,46 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         set((state) => {
           state.editorState.extraMasks = []
           state.editorState.curLineGroup = []
+          state.curRectMask = null
+        })
+      },
+
+      // 矩形重绘区域模式
+      toggleRectMaskMode: () => {
+        set((state) => {
+          state.rectMaskMode = !state.rectMaskMode
+          // 退出矩形模式时清掉当前正在绘制的矩形预览
+          if (!state.rectMaskMode) {
+            state.curRectMask = null
+          }
+        })
+      },
+
+      setRectMaskMode: (value: boolean) => {
+        set((state) => {
+          state.rectMaskMode = value
+          if (!value) {
+            state.curRectMask = null
+          }
+        })
+      },
+
+      setCurRectMask: (rect: Rect | null) => {
+        set((state) => {
+          state.curRectMask = rect
+        })
+      },
+
+      addRectToCurLineGroup: (rect: Rect) => {
+        const rectLine = {
+          isRect: true,
+          pts: [
+            { x: rect.x, y: rect.y },
+            { x: rect.x + rect.width, y: rect.y + rect.height },
+          ],
+        }
+        set((state) => {
+          state.editorState.curLineGroup.push(castDraft(rectLine))
         })
       },
     })),

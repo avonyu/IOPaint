@@ -1,7 +1,7 @@
 import { type ClassValue, clsx } from "clsx"
 import { SyntheticEvent } from "react"
 import { twMerge } from "tailwind-merge"
-import { LineGroup } from "./types"
+import { LineGroup, Rect } from "./types"
 import { BRUSH_COLOR } from "./const"
 
 export function cn(...inputs: ClassValue[]) {
@@ -200,11 +200,36 @@ export function drawLines(
   color = BRUSH_COLOR
 ) {
   ctx.strokeStyle = color
+  ctx.fillStyle = color
   ctx.lineCap = "round"
   ctx.lineJoin = "round"
 
   lines.forEach((line) => {
-    if (!line?.pts.length || !line.size) {
+    if (!line?.pts.length) {
+      return
+    }
+    // 矩形 line：以填充方式绘制整个矩形区域
+    if (line.isRect && line.pts.length >= 2) {
+      const topLeft = line.pts[0]
+      const bottomRight = line.pts[1]
+      const x = Math.min(topLeft.x, bottomRight.x)
+      const y = Math.min(topLeft.y, bottomRight.y)
+      const width = Math.abs(bottomRight.x - topLeft.x)
+      const height = Math.abs(bottomRight.y - topLeft.y)
+      ctx.fillRect(x, y, width, height)
+      return
+    }
+    if (!line.size) {
+      return
+    }
+    // 单点笔迹（单击不移动画笔）：显式绘制实心圆点。
+    // 不再依赖零长度路径 + round line cap 的渲染（部分环境不会绘制零长度路径），
+    // 保证单击也能生成有效的 mask。
+    if (line.pts.length === 1) {
+      const pt = line.pts[0]
+      ctx.beginPath()
+      ctx.arc(pt.x, pt.y, line.size / 2, 0, Math.PI * 2)
+      ctx.fill()
       return
     }
     ctx.lineWidth = line.size
@@ -213,6 +238,19 @@ export function drawLines(
     line.pts.forEach((pt) => ctx.lineTo(pt.x, pt.y))
     ctx.stroke()
   })
+}
+
+/**
+ * 将矩形以填充方式绘制到 canvas 上，作为 inpainting mask。
+ * 与现有 brush line mask 走同一套渲染管线，方便后续 generateMask 等逻辑复用。
+ */
+export function fillRect(
+  ctx: CanvasRenderingContext2D,
+  rect: Rect,
+  color = BRUSH_COLOR
+) {
+  ctx.fillStyle = color
+  ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
 }
 
 export const generateMask = (
