@@ -15,7 +15,6 @@ import {
   copyCanvasImage,
   downloadImage,
   drawLines,
-  fillRect,
   generateMask,
   isMidClick,
   isRightClick,
@@ -34,10 +33,11 @@ import {
 } from "lucide-react"
 import { useImage } from "@/hooks/useImage"
 import { Slider } from "./ui/slider"
-import { PluginName } from "@/lib/types"
+import { PluginName, Rect } from "@/lib/types"
 import { useStore } from "@/lib/states"
 import Cropper from "./Cropper"
 import { InteractiveSegPoints } from "./InteractiveSeg"
+import { RectMaskEditor } from "./RectMask"
 import useHotKey from "@/hooks/useHotkey"
 import Extender from "./Extender"
 import {
@@ -87,7 +87,6 @@ export default function Editor(props: EditorProps) {
     toggleRectMaskMode,
     setCurRectMask,
     setRectMaskMode,
-    addRectToCurLineGroup,
     isBatchMode,
   ] = useStore((state) => [
     state.disableShortCuts,
@@ -119,7 +118,6 @@ export default function Editor(props: EditorProps) {
     state.toggleRectMaskMode,
     state.setCurRectMask,
     state.setRectMaskMode,
-    state.addRectToCurLineGroup,
     state.isBatchMode(),
   ])
   const baseBrushSize = useStore((state) => state.editorState.baseBrushSize)
@@ -158,6 +156,8 @@ export default function Editor(props: EditorProps) {
   // 矩形绘制状态
   const rectStartRef = useRef<{ x: number; y: number } | null>(null)
   const isRectDrawingRef = useRef(false)
+  // 开始绘制新矩形前备份上一个待确认矩形，便于“点击空白”时恢复
+  const rectBackupRef = useRef<Rect | null>(null)
 
   const [sliderPos, setSliderPos] = useState<number>(0)
   const [isChangingBrushSizeByWheel, setIsChangingBrushSizeByWheel] =
@@ -230,11 +230,6 @@ export default function Editor(props: EditorProps) {
       )
     }
     drawLines(context, curLineGroup)
-
-    // 绘制当前正在拖拽的矩形预览（在 mask canvas 上同样以填充方式呈现）
-    if (curRectMask && curRectMask.width > 0 && curRectMask.height > 0) {
-      fillRect(context, curRectMask)
-    }
   }, [
     temporaryMasks,
     extraMasks,
@@ -244,7 +239,6 @@ export default function Editor(props: EditorProps) {
     curLineGroup,
     imageHeight,
     imageWidth,
-    curRectMask,
   ])
 
   const getCurrentRender = useCallback(async () => {
@@ -474,33 +468,34 @@ export default function Editor(props: EditorProps) {
       return
     }
 
-    // 矩形模式：拖拽结束，将矩形固化到 curLineGroup（作为填充 mask）
-    if (rectMaskMode && isRectDrawingRef.current && curRectMask) {
+    // 矩形模式：结束拖拽绘制，保留为可编辑的“待确认”矩形。
+    // 此阶段不写入 mask、也不调用模型，等待用户调整位置/大小后确认。
+    if (rectMaskMode && isRectDrawingRef.current) {
       isRectDrawingRef.current = false
       rectStartRef.current = null
       const finalRect = curRectMask
-      // 清除预览，避免影响 mask canvas 渲染（mask canvas 也会渲染 curLineGroup）
-      setCurRectMask(null)
-      // 忽略过小的矩形（避免误触）
-      if (finalRect.width < 4 || finalRect.height < 4) {
+      if (!finalRect || finalRect.width < 4 || finalRect.height < 4) {
+        // 视为点击空白/误触：恢复上一个待确认矩形（若有）
+        setCurRectMask(rectBackupRef.current)
         return
       }
-      // 计算真实矩形（处理反向拖拽与超出图片边界）
-      const x = Math.max(0, finalRect.x)
-      const y = Math.max(0, finalRect.y)
-      const right = Math.min(imageWidth, finalRect.x + finalRect.width)
-      const bottom = Math.min(imageHeight, finalRect.y + finalRect.height)
-      const width = Math.max(0, right - x)
-      const height = Math.max(0, bottom - y)
-      if (width === 0 || height === 0) {
-        return
-      }
-      // 写入 curLineGroup，让后续 render / mask 生成 / undo / redo 与 brush 一致
-      addRectToCurLineGroup({ x, y, width, height })
-      // 触发一次自动 inpainting 或等待手动触发
-      if (!runMannually) {
-        runInpainting()
-      }
+      // 处理反向拖拽并裁剪到图片范围内
+      const x = Math.max(0, Math.min(finalRect.x, imageWidth))
+      const y = Math.max(0, Math.min(finalRect.y, imageHeight))
+      const right = Math.max(
+        0,
+        Math.min(finalRect.x + finalRect.width, imageWidth)
+      )
+      const bottom = Math.max(
+        0,
+        Math.min(finalRect.y + finalRect.height, imageHeight)
+      )
+      setCurRectMask({
+        x,
+        y,
+        width: Math.max(0, right - x),
+        height: Math.max(0, bottom - y),
+      })
       return
     }
 
@@ -580,6 +575,7 @@ export default function Editor(props: EditorProps) {
     // 矩形模式：记录起点，拖拽过程实时预览
     if (rectMaskMode) {
       const xy = mouseXY(ev)
+      rectBackupRef.current = curRectMask
       rectStartRef.current = xy
       isRectDrawingRef.current = true
       setCurRectMask({ x: xy.x, y: xy.y, width: 0, height: 0 })
@@ -992,6 +988,17 @@ export default function Editor(props: EditorProps) {
             show={settings.showExtender}
           />
 
+          {rectMaskMode ? (
+            <RectMaskEditor
+              imageWidth={imageWidth}
+              imageHeight={imageHeight}
+              scale={getCurScale()}
+              drawing={isRectDrawingRef.current}
+            />
+          ) : (
+            <></>
+          )}
+
           {interactiveSegState.isInteractiveSeg ? (
             <InteractiveSegPoints />
           ) : (
@@ -1124,12 +1131,15 @@ export default function Editor(props: EditorProps) {
             {rectMaskMode ? <Square /> : <Brush />}
           </IconButton>
 
-          {settings.enableManualInpainting &&
+          {(settings.enableManualInpainting || !!curRectMask) &&
           settings.model.model_type === "inpaint" ? (
             <IconButton
               tooltip="Run Inpainting"
               disabled={
-                isProcessing || (!hadDrawSomething() && extraMasks.length === 0)
+                isProcessing ||
+                (!hadDrawSomething() &&
+                  extraMasks.length === 0 &&
+                  !curRectMask)
               }
               onClick={() => {
                 runInpainting()
@@ -1142,6 +1152,14 @@ export default function Editor(props: EditorProps) {
           )}
         </div>
       </div>
+
+      {curRectMask && curRectMask.width > 0 && curRectMask.height > 0 ? (
+        <div className="fixed bottom-5 right-5 px-4 py-2 rounded-[3rem] border backdrop-filter backdrop-blur-md bg-background/70 text-sm font-nums">
+          {Math.round(curRectMask.width)} x {Math.round(curRectMask.height)}
+        </div>
+      ) : (
+        <></>
+      )}
     </div>
   )
 }

@@ -1,7 +1,7 @@
 import { type ClassValue, clsx } from "clsx"
 import { SyntheticEvent } from "react"
 import { twMerge } from "tailwind-merge"
-import { LineGroup, Rect } from "./types"
+import { LineGroup } from "./types"
 import { BRUSH_COLOR } from "./const"
 
 export function cn(...inputs: ClassValue[]) {
@@ -379,18 +379,7 @@ export function drawLines(
   })
 }
 
-/**
- * 将矩形以填充方式绘制到 canvas 上，作为 inpainting mask。
- * 与现有 brush line mask 走同一套渲染管线，方便后续 generateMask 等逻辑复用。
- */
-export function fillRect(
-  ctx: CanvasRenderingContext2D,
-  rect: Rect,
-  color = BRUSH_COLOR
-) {
-  ctx.fillStyle = color
-  ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
-}
+
 
 export const generateMask = (
   imageWidth: number,

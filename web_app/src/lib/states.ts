@@ -260,6 +260,7 @@ type AppAction = {
   setRectMaskMode: (value: boolean) => void
   setCurRectMask: (rect: Rect | null) => void
   addRectToCurLineGroup: (rect: Rect) => void
+  commitPendingRect: () => void
 
   // 批量图片（共享 mask）
   isBatchMode: () => boolean
@@ -488,6 +489,10 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         if (isInpainting || file === null) {
           return
         }
+
+        // 若存在待确认的矩形，先把它写入 mask，与笔刷笔迹一起参与本次重绘
+        get().commitPendingRect()
+
         if (
           get().settings.model.support_outpainting &&
           settings.showExtender &&
@@ -1240,6 +1245,38 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         })
       },
 
+      commitPendingRect: () => {
+        const rect = get().curRectMask
+        if (!rect) {
+          return
+        }
+        set((state) => {
+          state.curRectMask = null
+        })
+        if (rect.width < 4 || rect.height < 4) {
+          return
+        }
+        const { imageWidth, imageHeight } = get()
+        const x = Math.max(0, Math.min(rect.x, imageWidth))
+        const y = Math.max(0, Math.min(rect.y, imageHeight))
+        const right = Math.max(
+          0,
+          Math.min(rect.x + rect.width, imageWidth)
+        )
+        const bottom = Math.max(
+          0,
+          Math.min(rect.y + rect.height, imageHeight)
+        )
+        if (right - x > 0 && bottom - y > 0) {
+          get().addRectToCurLineGroup({
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+          })
+        }
+      },
+
       // 批量图片（共享 mask）
       isBatchMode: (): boolean => {
         return get().batchState.files.length > 0
@@ -1308,7 +1345,6 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
           state.interactiveSegState = castDraft(
             defaultValues.interactiveSegState
           )
-          state.curRectMask = null
         })
 
         if (toWidth > 0 && toHeight > 0) {
@@ -1358,6 +1394,7 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
           prevExtraMasks,
           temporaryMasks,
         } = get().editorState
+        const curRectMask = get().curRectMask
 
         const [scaledExtra, scaledPrev, scaledTemp] = await Promise.all([
           Promise.all(
@@ -1378,6 +1415,15 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
           state.editorState.extraMasks = castDraft(scaledExtra)
           state.editorState.prevExtraMasks = castDraft(scaledPrev)
           state.editorState.temporaryMasks = castDraft(scaledTemp)
+          // 待确认的矩形也随尺寸缩放，保证切换图片后位置一致
+          state.curRectMask = curRectMask
+            ? {
+                x: Math.round(curRectMask.x * scaleX),
+                y: Math.round(curRectMask.y * scaleY),
+                width: Math.round(curRectMask.width * scaleX),
+                height: Math.round(curRectMask.height * scaleY),
+              }
+            : null
         })
       },
 
@@ -1393,6 +1439,8 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         if (batchState.files.length === 0) {
           return
         }
+        // 待确认的矩形先写入共享 mask，随“应用到全部”一起处理
+        get().commitPendingRect()
         const { curLineGroup, extraMasks } = get().editorState
         if (
           curLineGroup.length === 0 &&
