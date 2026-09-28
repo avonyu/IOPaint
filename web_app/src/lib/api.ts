@@ -1,4 +1,5 @@
 import {
+  BatchAnchor,
   Filename,
   GenInfo,
   ModelInfo,
@@ -121,17 +122,18 @@ export default async function inpaint(
 /**
  * 批量重绘：多张图片共用同一个 mask，服务端处理后返回 zip 压缩包。
  */
-export async function batchInpaintZip(
+export async function batchInpaint(
   imagesBase64: string[],
   filenames: string[],
   maskBase64: string,
   maskWidth: number,
   maskHeight: number,
+  anchor: BatchAnchor,
   settings: Settings,
   croperRect: Rect,
   extenderState: Rect
-): Promise<Blob> {
-  const res = await fetch(`${API_ENDPOINT}/batch_inpaint_zip`, {
+): Promise<{ batchId: string; results: { name: string; image: string }[] }> {
+  const res = await fetch(`${API_ENDPOINT}/batch_inpaint`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -142,9 +144,21 @@ export async function batchInpaintZip(
       mask: maskBase64,
       mask_width: maskWidth,
       mask_height: maskHeight,
+      anchor,
       config: buildInpaintConfig(settings, croperRect, extenderState, null),
     }),
   })
+  if (res.ok) {
+    const data = await res.json()
+    return { batchId: data.batch_id, results: data.results ?? [] }
+  }
+  throw await throwErrors(res)
+}
+
+export async function batchDownloadZip(batchId: string): Promise<Blob> {
+  const res = await fetch(
+    `${API_ENDPOINT}/batch_download?batch_id=${encodeURIComponent(batchId)}`
+  )
   if (res.ok) {
     return await res.blob()
   }

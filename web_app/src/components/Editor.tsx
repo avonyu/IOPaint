@@ -129,7 +129,12 @@ export default function Editor(props: EditorProps) {
   const extraMasks = useStore((state) => state.editorState.extraMasks);
   const temporaryMasks = useStore((state) => state.editorState.temporaryMasks);
   const lineGroups = useStore((state) => state.editorState.lineGroups);
-  const curLineGroup = useStore((state) => state.editorState.curLineGroup);
+  const curLineGroup = useStore((state) => state.editorState.curLineGroup)
+  const batchResults = useStore((state) => state.batchState.results)
+  const batchIndex = useStore((state) => state.batchState.currentIndex)
+  const batchShowResult = useStore((state) => state.batchState.showResult)
+  const batchId = useStore((state) => state.batchState.batchId)
+  const downloadBatchZip = useStore((state) => state.downloadBatchZip);
 
   // Local State
   const [showOriginal, setShowOriginal] = useState(false);
@@ -631,6 +636,11 @@ export default function Editor(props: EditorProps) {
   );
 
   const download = useCallback(async () => {
+    // 批量模式：下载所有结果打包成的 zip
+    if (isBatchMode) {
+      await downloadBatchZip();
+      return;
+    }
     if (file === undefined) {
       return;
     }
@@ -673,6 +683,8 @@ export default function Editor(props: EditorProps) {
       aDownloadLink.click();
     }
   }, [
+    isBatchMode,
+    downloadBatchZip,
     file,
     enableAutoSaving,
     renders,
@@ -945,6 +957,19 @@ export default function Editor(props: EditorProps) {
                 }
               }}
             />
+            {isBatchMode && batchShowResult && batchResults[batchIndex] ? (
+              <img
+                className="[grid-area:editor-content] pointer-events-none"
+                src={batchResults[batchIndex].url}
+                alt="batch result"
+                style={{
+                  width: `${imageWidth}px`,
+                  height: `${imageHeight}px`,
+                }}
+              />
+            ) : (
+              <></>
+            )}
             <div
               className="[grid-area:editor-content] pointer-events-none grid [grid-template-areas:'original-image-content']"
               style={{
@@ -1127,9 +1152,9 @@ export default function Editor(props: EditorProps) {
           </IconButton>
           
           <IconButton
-            tooltip="Save Image"
+            tooltip={isBatchMode ? "Download batch results (zip)" : "Save Image"}
             tooltipSide="left"
-            disabled={!renders.length}
+            disabled={isBatchMode ? !batchId : !renders.length}
             onClick={download}
           >
             <Download />

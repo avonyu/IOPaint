@@ -98,6 +98,9 @@ export interface Rect {
   height: number
 }
 
+// 批量处理时的区域锚点：矩形相对图片哪个角定位
+export type BatchAnchor = "topleft" | "topright" | "bottomleft" | "bottomright"
+
 export interface Point {
   x: number
   y: number

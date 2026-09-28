@@ -1,10 +1,13 @@
 import asyncio
+import base64
 import io
 import os
 import threading
 import time
 import traceback
+import uuid
 import zipfile
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -55,6 +58,8 @@ from iopaint.schema import (
     SwitchModelRequest,
     InpaintRequest,
     BatchInpaintRequest,
+    BatchInpaintResponse,
+    BatchResultItem,
     RunPluginRequest,
     SDSampler,
     PluginInfo,
@@ -68,6 +73,48 @@ from iopaint.schema import (
 
 CURRENT_DIR = Path(__file__).parent.absolute().resolve()
 WEB_APP_DIR = CURRENT_DIR / "web_app"
+
+
+def place_mask_by_anchor(
+    mask: np.ndarray,
+    width: int,
+    height: int,
+    anchor_right: bool,
+    anchor_bottom: bool,
+) -> np.ndarray:
+    """Place a shared mask onto a width×height canvas anchored to a corner.
+
+    The mask is only translated (never resized), keeping its pixel size and its
+    offset relative to the chosen corner.
+    """
+    src_h, src_w = mask.shape[:2]
+    offset_x = width - src_w if anchor_right else 0
+    offset_y = height - src_h if anchor_bottom else 0
+
+    target = np.zeros((height, width), dtype=np.uint8)
+    x0 = max(0, offset_x)
+    y0 = max(0, offset_y)
+    sx0 = max(0, -offset_x)
+    sy0 = max(0, -offset_y)
+    copy_w = min(src_w - sx0, width - x0)
+    copy_h = min(src_h - sy0, height - y0)
+    if copy_w > 0 and copy_h > 0:
+        target[y0 : y0 + copy_h, x0 : x0 + copy_w] = mask[
+            sy0 : sy0 + copy_h, sx0 : sx0 + copy_w
+        ]
+    return target
+
+
+# 最近几批的批量结果缓存（用于结果预览后再打包下载）
+_BATCH_CACHE: "OrderedDict[str, OrderedDict[str, bytes]]" = OrderedDict()
+_BATCH_CACHE_MAX = 3
+
+
+def _cache_batch(batch_id: str, files: "OrderedDict[str, bytes]") -> None:
+    _BATCH_CACHE[batch_id] = files
+    _BATCH_CACHE.move_to_end(batch_id)
+    while len(_BATCH_CACHE) > _BATCH_CACHE_MAX:
+        _BATCH_CACHE.popitem(last=False)
 
 
 def api_middleware(app: FastAPI):
@@ -169,9 +216,15 @@ class Api:
         self.add_api_route("/api/v1/inputimage", self.api_input_image, methods=["GET"])
         self.add_api_route("/api/v1/inpaint", self.api_inpaint, methods=["POST"])
         self.add_api_route(
-            "/api/v1/batch_inpaint_zip",
-            self.api_batch_inpaint_zip,
+            "/api/v1/batch_inpaint",
+            self.api_batch_inpaint,
             methods=["POST"],
+            response_model=BatchInpaintResponse,
+        )
+        self.add_api_route(
+            "/api/v1/batch_download",
+            self.api_batch_download,
+            methods=["GET"],
         )
         self.add_api_route("/api/v1/switch_plugin_model", self.api_switch_plugin_model, methods=["POST"])
         self.add_api_route("/api/v1/run_plugin_gen_mask", self.api_run_plugin_gen_mask, methods=["POST"])
@@ -317,79 +370,96 @@ class Api:
             headers={"X-Seed": str(req.sd_seed)},
         )
 
-    def api_batch_inpaint_zip(self, req: BatchInpaintRequest):
-        """Batch inpaint multiple images sharing one mask and return a zip."""
+    def api_batch_inpaint(self, req: BatchInpaintRequest) -> BatchInpaintResponse:
+        """Batch inpaint multiple images sharing one mask.
+
+        Returns the per-image results so the frontend can preview them, and
+        caches the raw bytes so the whole batch can be downloaded as a zip later.
+        """
         if len(req.images) == 0:
             raise HTTPException(status_code=400, detail="No images provided")
 
-        # 传入的 mask 以 mask_width/mask_height 像素坐标系表示，
-        # 每张图片按自身尺寸做归一化缩放后再使用。
+        # 共享 mask：按所选角平移到每张图片（只平移、不缩放）
         mask, _, _, _ = decode_base64_to_image(req.mask, gray=True)
         mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)[1]
-        if mask.shape[1] != req.mask_width or mask.shape[0] != req.mask_height:
-            mask = cv2.resize(
-                mask,
-                (req.mask_width, req.mask_height),
-                interpolation=cv2.INTER_NEAREST,
-            )
+        anchor = req.anchor
+        anchor_right = anchor in ("topright", "bottomright")
+        anchor_bottom = anchor in ("bottomleft", "bottomright")
 
         total = len(req.images)
         used_names: Dict[str, int] = {}
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for index, image_base64 in enumerate(req.images):
-                try:
-                    image, alpha_channel, infos, _ext = decode_base64_to_image(
-                        image_base64
-                    )
-                except Exception as e:
-                    logger.warning(f"Skip invalid image at index {index}: {e}")
-                    continue
+        results: List[BatchResultItem] = []
+        files: "OrderedDict[str, bytes]" = OrderedDict()
 
-                height, width = image.shape[:2]
-                if mask.shape[0] != height or mask.shape[1] != width:
-                    image_mask = cv2.resize(
-                        mask, (width, height), interpolation=cv2.INTER_NEAREST
-                    )
-                else:
-                    image_mask = mask
+        for index, image_base64 in enumerate(req.images):
+            try:
+                image, alpha_channel, infos, _ext = decode_base64_to_image(image_base64)
+            except Exception as e:
+                logger.warning(f"Skip invalid image at index {index}: {e}")
+                continue
 
-                raw_name = (
-                    req.filenames[index] if index < len(req.filenames) else ""
-                ) or f"image_{index + 1}"
-                stem = Path(raw_name).stem or f"image_{index + 1}"
-                if stem in used_names:
-                    used_names[stem] += 1
-                    stem = f"{stem}_{used_names[stem]}"
-                else:
-                    used_names[stem] = 0
+            height, width = image.shape[:2]
+            image_mask = place_mask_by_anchor(
+                mask, width, height, anchor_right, anchor_bottom
+            )
 
-                logger.info(f"Batch inpainting {index + 1}/{total}: {raw_name}")
-                asyncio.run(
-                    self.sio.emit(
-                        "batch_progress",
-                        {"current": index + 1, "total": total},
-                    )
+            raw_name = (
+                req.filenames[index] if index < len(req.filenames) else ""
+            ) or f"image_{index + 1}"
+            stem = Path(raw_name).stem or f"image_{index + 1}"
+            if stem in used_names:
+                used_names[stem] += 1
+                stem = f"{stem}_{used_names[stem]}"
+            else:
+                used_names[stem] = 0
+            file_name = f"{stem}.png"
+
+            logger.info(f"Batch inpainting {index + 1}/{total}: {raw_name}")
+            asyncio.run(
+                self.sio.emit(
+                    "batch_progress",
+                    {"current": index + 1, "total": total},
                 )
+            )
 
-                start = time.time()
-                rgb_np_img = self.model_manager(image, image_mask, req.config)
-                logger.info(f"process time: {(time.time() - start) * 1000:.2f}ms")
-                torch_gc()
+            start = time.time()
+            rgb_np_img = self.model_manager(image, image_mask, req.config)
+            logger.info(f"process time: {(time.time() - start) * 1000:.2f}ms")
+            torch_gc()
 
-                rgb_np_img = cv2.cvtColor(
-                    rgb_np_img.astype(np.uint8), cv2.COLOR_BGR2RGB
+            rgb_np_img = cv2.cvtColor(rgb_np_img.astype(np.uint8), cv2.COLOR_BGR2RGB)
+            rgb_res = concat_alpha_channel(rgb_np_img, alpha_channel)
+            img_bytes = pil_to_bytes(
+                Image.fromarray(rgb_res),
+                ext="png",
+                quality=self.config.quality,
+                infos=infos,
+            )
+
+            files[file_name] = img_bytes
+            results.append(
+                BatchResultItem(
+                    name=file_name,
+                    image="data:image/png;base64,"
+                    + base64.b64encode(img_bytes).decode(),
                 )
-                rgb_res = concat_alpha_channel(rgb_np_img, alpha_channel)
-                img_bytes = pil_to_bytes(
-                    Image.fromarray(rgb_res),
-                    ext="png",
-                    quality=self.config.quality,
-                    infos=infos,
-                )
-                zip_file.writestr(f"{stem}.png", img_bytes)
+            )
 
         asyncio.run(self.sio.emit("batch_finish", {"total": total}))
+
+        batch_id = uuid.uuid4().hex
+        _cache_batch(batch_id, files)
+        return BatchInpaintResponse(batch_id=batch_id, results=results)
+
+    def api_batch_download(self, batch_id: str):
+        files = _BATCH_CACHE.get(batch_id)
+        if files is None:
+            raise HTTPException(status_code=404, detail="Batch results not found")
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for name, data in files.items():
+                zip_file.writestr(name, data)
         zip_buffer.seek(0)
         return Response(
             content=zip_buffer.read(),

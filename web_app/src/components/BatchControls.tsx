@@ -5,20 +5,24 @@ import { useStore } from "@/lib/states"
 import { socket } from "@/lib/socket"
 
 /**
- * 批量图片（共享 mask）控制条：切换浏览图片、应用到全部并下载 zip。
+ * 批量图片控制（集成在 Header 中）：
+ * 切换浏览、应用到全部、切换显示结果/原图、清空。
+ * 结果下载走右侧工具栏的下载按钮。
  */
-const BatchBar = () => {
+const BatchControls = () => {
   const [
     batchState,
     isProcessing,
     switchBatchIndex,
-    batchInpaintDownload,
+    batchInpaintAll,
+    setBatchShowResult,
     clearBatch,
   ] = useStore((state) => [
     state.batchState,
     state.getIsProcessing(),
     state.switchBatchIndex,
-    state.batchInpaintDownload,
+    state.batchInpaintAll,
+    state.setBatchShowResult,
     state.clearBatch,
   ])
 
@@ -45,12 +49,18 @@ const BatchBar = () => {
     return null
   }
 
-  const { currentIndex, names, files, isProcessing: isBatchProcessing } =
-    batchState
+  const {
+    currentIndex,
+    names,
+    files,
+    isProcessing: isBatchProcessing,
+    results,
+    showResult,
+  } = batchState
   const busy = isBatchProcessing || isProcessing
 
   return (
-    <div className="z-10 fixed bottom-[88px] left-1/2 translate-x-[-50%] flex items-center gap-2 border rounded-[3rem] px-3 py-1.5 backdrop-filter backdrop-blur-md bg-background/80">
+    <div className="flex items-center gap-1">
       <Layers className="w-4 h-4 opacity-70" />
       <IconButton
         tooltip="Previous image"
@@ -59,11 +69,11 @@ const BatchBar = () => {
       >
         <ChevronLeft />
       </IconButton>
-      <div className="flex flex-col items-center leading-tight min-w-[130px]">
+      <div className="flex flex-col items-center leading-tight min-w-[110px]">
         <span className="text-xs font-nums">
           {currentIndex + 1} / {files.length}
         </span>
-        <span className="text-[11px] opacity-70 max-w-[170px] truncate">
+        <span className="text-[11px] opacity-70 max-w-[150px] truncate">
           {names[currentIndex]}
         </span>
       </div>
@@ -79,14 +89,25 @@ const BatchBar = () => {
         size="sm"
         className="h-7"
         disabled={busy}
-        onClick={() => batchInpaintDownload()}
+        onClick={() => batchInpaintAll()}
       >
         {isBatchProcessing
           ? progress.total > 0
             ? `处理中 ${progress.current}/${progress.total}`
             : "处理中..."
-          : "应用到全部并下载"}
+          : "应用到全部"}
       </Button>
+
+      {results.length > 0 ? (
+        <Button
+          size="sm"
+          variant={showResult ? "default" : "secondary"}
+          className="h-7"
+          onClick={() => setBatchShowResult(!showResult)}
+        >
+          {showResult ? "显示结果" : "显示原图"}
+        </Button>
+      ) : null}
 
       <IconButton tooltip="Clear batch" disabled={busy} onClick={clearBatch}>
         <X />
@@ -95,4 +116,4 @@ const BatchBar = () => {
   )
 }
 
-export default BatchBar
+export default BatchControls

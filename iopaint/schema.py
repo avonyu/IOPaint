@@ -465,10 +465,25 @@ class BatchInpaintRequest(BaseModel):
     mask: str = Field(..., description="base64 encoded mask shared by all images")
     mask_width: int = Field(..., gt=0, description="Width of the mask image")
     mask_height: int = Field(..., gt=0, description="Height of the mask image")
+    anchor: Literal["topleft", "topright", "bottomleft", "bottomright"] = Field(
+        "topleft",
+        description="Which image corner the shared mask is anchored to. "
+        "The mask is translated (not resized) relative to this corner for each image.",
+    )
     config: InpaintRequest = Field(
         default_factory=InpaintRequest,
         description="Inpainting config shared by all images",
     )
+
+
+class BatchResultItem(BaseModel):
+    name: str = Field(..., description="Result file name")
+    image: str = Field(..., description="base64 encoded result image")
+
+
+class BatchInpaintResponse(BaseModel):
+    batch_id: str = Field(..., description="Id used to download this batch as a zip")
+    results: List[BatchResultItem] = Field(default_factory=list)
 
 
 class RunPluginRequest(BaseModel):

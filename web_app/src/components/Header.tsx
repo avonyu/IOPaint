@@ -13,6 +13,7 @@ import { useStore } from "@/lib/states"
 import SettingsDialog from "./Settings"
 import { cn, fileToImage, isSupportedImageFile } from "@/lib/utils"
 import Coffee from "./Coffee"
+import BatchControls from "./BatchControls"
 import { useToast } from "./ui/use-toast"
 
 const Header = () => {
@@ -235,7 +236,10 @@ const Header = () => {
 
       </div>
 
-      {model.need_prompt ? <PromptInput /> : <></>}
+      <div className="flex items-center gap-3">
+        <BatchControls />
+        {model.need_prompt ? <PromptInput /> : <></>}
+      </div>
 
       <div className="flex gap-1">
         <Coffee />

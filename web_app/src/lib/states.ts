@@ -5,6 +5,7 @@ import { castDraft } from "immer"
 import { createWithEqualityFn } from "zustand/traditional"
 import {
   AdjustMaskOperate,
+  BatchAnchor,
   CV2Flag,
   ExtenderDirection,
   LDMSampler,
@@ -36,11 +37,12 @@ import {
   generateMask,
   getImageFileSize,
   loadImage,
-  scaleMaskImage,
+  shiftMaskImage,
   srcToFile,
 } from "./utils"
 import inpaint, {
-  batchInpaintZip,
+  batchDownloadZip,
+  batchInpaint,
   getGenInfo,
   postAdjustMask,
   runPlugin,
@@ -128,6 +130,11 @@ type InteractiveSegState = {
   clicks: number[][]
 }
 
+type BatchResult = {
+  name: string
+  url: string
+}
+
 type BatchState = {
   files: File[]
   names: string[]
@@ -135,6 +142,12 @@ type BatchState = {
   isProcessing: boolean
   processedCount: number
   totalCount: number
+  // 批量处理时矩形区域相对图片的锚点
+  anchor: BatchAnchor
+  // 批量处理结果（与服务端缓存对应，用于预览与打包下载）
+  batchId: string | null
+  results: BatchResult[]
+  showResult: boolean
 }
 
 type EditorState = {
@@ -266,13 +279,16 @@ type AppAction = {
   setBatchFiles: (files: File[]) => Promise<void>
   switchBatchIndex: (index: number) => Promise<void>
   clearBatch: () => void
-  rescaleMask: (
-    fromWidth: number,
-    fromHeight: number,
-    toWidth: number,
-    toHeight: number
+  setBatchAnchor: (anchor: BatchAnchor) => void
+  translateMask: (
+    dx: number,
+    dy: number,
+    width: number,
+    height: number
   ) => Promise<void>
-  batchInpaintDownload: () => Promise<void>
+  batchInpaintAll: () => Promise<void>
+  setBatchShowResult: (value: boolean) => void
+  downloadBatchZip: () => Promise<void>
 
   adjustMask: (operate: AdjustMaskOperate) => Promise<void>
   clearMask: () => void
@@ -347,6 +363,10 @@ const defaultValues: AppState = {
     isProcessing: false,
     processedCount: 0,
     totalCount: 0,
+    anchor: "topleft",
+    batchId: null,
+    results: [],
+    showResult: false,
   },
 
   serverConfig: {
@@ -1275,6 +1295,7 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
       },
 
       clearBatch: () => {
+        get().batchState.results.forEach((r) => URL.revokeObjectURL(r.url))
         set((state) => {
           state.batchState = castDraft(defaultValues.batchState)
         })
@@ -1302,9 +1323,20 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
           console.error(e)
         }
 
-        // 在切换前，把共享 mask 从当前图片尺寸缩放到目标图片尺寸
+        // 按锚点把共享 mask 平移到目标图片（只平移、不按比例缩放）
         if (fromWidth > 0 && fromHeight > 0 && toWidth > 0 && toHeight > 0) {
-          await get().rescaleMask(fromWidth, fromHeight, toWidth, toHeight)
+          const anchor = batchState.anchor
+          const dx =
+            anchor === "topright" || anchor === "bottomright"
+              ? toWidth - fromWidth
+              : 0
+          const dy =
+            anchor === "bottomleft" || anchor === "bottomright"
+              ? toHeight - fromHeight
+              : 0
+          if (dx !== 0 || dy !== 0) {
+            await get().translateMask(dx, dy, toWidth, toHeight)
+          }
         }
 
         set((state) => {
@@ -1329,39 +1361,28 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         }
       },
 
-      rescaleMask: async (
-        fromWidth: number,
-        fromHeight: number,
-        toWidth: number,
-        toHeight: number
+      setBatchAnchor: (anchor: BatchAnchor) => {
+        set((state) => {
+          state.batchState.anchor = anchor
+        })
+      },
+
+      translateMask: async (
+        dx: number,
+        dy: number,
+        width: number,
+        height: number
       ) => {
-        if (
-          fromWidth <= 0 ||
-          fromHeight <= 0 ||
-          toWidth <= 0 ||
-          toHeight <= 0 ||
-          (fromWidth === toWidth && fromHeight === toHeight)
-        ) {
+        if (width <= 0 || height <= 0 || (dx === 0 && dy === 0)) {
           return
         }
-        const scaleX = toWidth / fromWidth
-        const scaleY = toHeight / fromHeight
-        const scalePoint = (p: Point): Point => ({
-          x: Math.round(p.x * scaleX),
-          y: Math.round(p.y * scaleY),
+        const shiftPoint = (p: Point): Point => ({ x: p.x + dx, y: p.y + dy })
+        const shiftLine = (line: Line): Line => ({
+          ...line,
+          pts: line.pts.map(shiftPoint),
         })
-        const scaleLine = (line: Line): Line => {
-          const newLine: Line = { ...line, pts: line.pts.map(scalePoint) }
-          if (line.size) {
-            newLine.size = Math.max(
-              1,
-              Math.round(line.size * ((scaleX + scaleY) / 2))
-            )
-          }
-          return newLine
-        }
-        const scaleGroup = (group: LineGroup): LineGroup =>
-          group.map(scaleLine)
+        const shiftGroup = (group: LineGroup): LineGroup =>
+          group.map(shiftLine)
 
         const {
           curLineGroup,
@@ -1373,38 +1394,39 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
         } = get().editorState
         const curRectMask = get().curRectMask
 
-        const [scaledExtra, scaledPrev, scaledTemp] = await Promise.all([
+        const [shiftedExtra, shiftedPrev, shiftedTemp] = await Promise.all([
           Promise.all(
-            extraMasks.map((m) => scaleMaskImage(m, toWidth, toHeight))
+            extraMasks.map((m) => shiftMaskImage(m, dx, dy, width, height))
           ),
           Promise.all(
-            prevExtraMasks.map((m) => scaleMaskImage(m, toWidth, toHeight))
+            prevExtraMasks.map((m) => shiftMaskImage(m, dx, dy, width, height))
           ),
           Promise.all(
-            temporaryMasks.map((m) => scaleMaskImage(m, toWidth, toHeight))
+            temporaryMasks.map((m) => shiftMaskImage(m, dx, dy, width, height))
           ),
         ])
 
         set((state) => {
-          state.editorState.curLineGroup = castDraft(scaleGroup(curLineGroup))
-          state.editorState.lastLineGroup = castDraft(scaleGroup(lastLineGroup))
-          state.editorState.lineGroups = castDraft(lineGroups.map(scaleGroup))
-          state.editorState.extraMasks = castDraft(scaledExtra)
-          state.editorState.prevExtraMasks = castDraft(scaledPrev)
-          state.editorState.temporaryMasks = castDraft(scaledTemp)
-          // 待确认的矩形也随尺寸缩放，保证切换图片后位置一致
+          state.editorState.curLineGroup = castDraft(shiftGroup(curLineGroup))
+          state.editorState.lastLineGroup = castDraft(
+            shiftGroup(lastLineGroup)
+          )
+          state.editorState.lineGroups = castDraft(lineGroups.map(shiftGroup))
+          state.editorState.extraMasks = castDraft(shiftedExtra)
+          state.editorState.prevExtraMasks = castDraft(shiftedPrev)
+          state.editorState.temporaryMasks = castDraft(shiftedTemp)
           state.curRectMask = curRectMask
             ? {
-                x: Math.round(curRectMask.x * scaleX),
-                y: Math.round(curRectMask.y * scaleY),
-                width: Math.round(curRectMask.width * scaleX),
-                height: Math.round(curRectMask.height * scaleY),
+                x: curRectMask.x + dx,
+                y: curRectMask.y + dy,
+                width: curRectMask.width,
+                height: curRectMask.height,
               }
             : null
         })
       },
 
-      batchInpaintDownload: async () => {
+      batchInpaintAll: async () => {
         const {
           batchState,
           imageWidth,
@@ -1431,10 +1453,16 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
           return
         }
 
+        // 释放上一次结果的预览 URL
+        get().batchState.results.forEach((r) => URL.revokeObjectURL(r.url))
+
         set((state) => {
           state.batchState.isProcessing = true
           state.batchState.processedCount = 0
           state.batchState.totalCount = state.batchState.files.length
+          state.batchState.results = []
+          state.batchState.batchId = null
+          state.batchState.showResult = false
         })
 
         try {
@@ -1451,18 +1479,63 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
             batchState.files.map((f) => convertToBase64(f))
           )
 
-          const zipBlob = await batchInpaintZip(
+          const { batchId, results } = await batchInpaint(
             imagesBase64,
             batchState.names,
             maskBase64,
             imageWidth,
             imageHeight,
+            batchState.anchor,
             settings,
             cropperState,
             extenderState
           )
 
-          const url = URL.createObjectURL(zipBlob)
+          const newResults = results.map((r) => ({
+            name: r.name,
+            url: URL.createObjectURL(dataURItoBlob(r.image)),
+          }))
+
+          set((state) => {
+            state.batchState.batchId = batchId
+            state.batchState.results = castDraft(newResults)
+            // 处理完成后默认显示结果
+            state.batchState.showResult = newResults.length > 0
+            state.batchState.isProcessing = false
+          })
+
+          toast({
+            description: `Batch inpainting finished (${newResults.length} images)`,
+          })
+        } catch (e: any) {
+          toast({
+            variant: "destructive",
+            description: e.message ? e.message : e.toString(),
+          })
+          set((state) => {
+            state.batchState.isProcessing = false
+          })
+        }
+      },
+
+      setBatchShowResult: (value: boolean) => {
+        set((state) => {
+          state.batchState.showResult = value
+        })
+      },
+
+      downloadBatchZip: async () => {
+        const { batchId } = get().batchState
+        if (!batchId) {
+          toast({
+            variant: "destructive",
+            description: "No batch results to download",
+          })
+          return
+        }
+        try {
+          const blob = await batchDownloadZip(batchId)
+          const url = URL.createObjectURL(blob)
           const link = document.createElement("a")
           link.href = url
           link.download = "iopaint_batch_results.zip"
@@ -1470,18 +1543,10 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
           link.click()
           link.remove()
           window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-
-          toast({
-            description: `Batch inpainting finished (${batchState.files.length} images)`,
-          })
         } catch (e: any) {
           toast({
             variant: "destructive",
             description: e.message ? e.message : e.toString(),
-          })
-        } finally {
-          set((state) => {
-            state.batchState.isProcessing = false
           })
         }
       },
