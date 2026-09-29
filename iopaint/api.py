@@ -118,6 +118,7 @@ def _cache_batch(batch_id: str, files: "OrderedDict[str, bytes]") -> None:
 
 
 def api_middleware(app: FastAPI):
+    console = None
     rich_available = False
     try:
         if os.environ.get("WEBUI_RICH_EXCEPTIONS", None) is not None:
