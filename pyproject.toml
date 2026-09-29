@@ -72,3 +72,184 @@ packages.find.include = ["iopaint*"]
 "iopaint.model.anytext" = ["*.yaml"]
 "iopaint.model.anytext.ocr_recog" = ["*.txt"]
 "iopaint.web_app" = ["index.html", "favicon.ico", "assets/*"]
+
+[tool.pyright]
+# Type checking strategy: only enforce strict typing on first-party code we own.
+# Vendored third-party model code (ControlNet, BrushNet, PowerPaint, BriARMBG,
+# Segment Anything, AnyText) keeps upstream types untouched.
+include = ["iopaint/__init__.py", "iopaint/api.py", "iopaint/cli.py",
+           "iopaint/benchmark.py", "iopaint/download.py", "iopaint/file_manager",
+           "iopaint/helper.py", "iopaint/installer.py", "iopaint/model_manager.py",
+           "iopaint/runtime.py", "iopaint/schema.py", "iopaint/web_config.py"]
+exclude = ["iopaint/model", "iopaint/plugins/anime_seg.py",
+           "iopaint/plugins/base_plugin.py",
+           "iopaint/plugins/basicsr", "iopaint/plugins/briarmbg*",
+           "iopaint/plugins/facexlib", "iopaint/plugins/gfpgan",
+           "iopaint/plugins/gfpgan_plugin.py", "iopaint/plugins/gfpganer.py",
+           "iopaint/plugins/interactive_seg.py",
+           "iopaint/plugins/realesrgan.py", "iopaint/plugins/remove_bg.py",
+           "iopaint/plugins/restoreformer.py",
+           "iopaint/plugins/segment_anything",
+           "iopaint/plugins/segment_anything2", "iopaint/tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+# Strategy: only enforce strict linting on first-party code. Vendored
+# third-party model code keeps upstream style untouched.
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort (import sort)
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade (Python version migration)
+    "SIM",  # flake8-simplify
+    "C4",   # flake8-comprehensions
+    "PIE",  # flake8-pie
+    "PT",   # flake8-pytest-style
+    "RET",  # flake8-return
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+]
+ignore = [
+    # These are intentional or unavoidable in this codebase; see
+    # per-file-ignores below for context where it matters.
+    "A",
+    "ARG",
+    "ANN",
+    "ASYNC",
+    "B006",
+    "B008",
+    "B023",
+    "B026",
+    "BLE001",
+    "C408",
+    "C417",
+    "C419",
+    "COM",
+    "C90",
+    "D",
+    "DOC",
+    "DTZ005",
+    "E501",
+    "E722",
+    "E731",
+    "E741",
+    "EM",
+    "EXE",
+    "F401",
+    "F403",
+    "F405",
+    "F541",
+    "F811",
+    "F821",
+    "F841",
+    "FA",
+    "FBT",
+    "FIX",
+    "FURB136",
+    "FURB163",
+    "G",
+    "ICN",
+    "INP",
+    "ISC",
+    "LOG015",
+    "N",
+    "N999",
+    "NPY",
+    "PD",
+    "PERF",
+    "PIE790",
+    "PIE794",
+    "PIE808",
+    "PLC0206",
+    "PLC0414",
+    "PLR",
+    "PLR0133",
+    "PLR0402",
+    "PLR1704",
+    "PLR1711",
+    "PLW0127",
+    "PLW0245",
+    "PTH",
+    "PYI041",
+    "Q",
+    "RUF012",
+    "RUF013",
+    "RUF015",
+    "RUF022",
+    "RUF034",
+    "RUF046",
+    "RUF059",
+    "S",
+    "SIM101",
+    "SIM102",
+    "SIM114",
+    "SIM115",
+    "SIM118",
+    "SIM201",
+    "SIM210",
+    "T10",
+    "TC",
+    "TD",
+    "TRY",
+    "TRY002",
+    "TRY201",
+    "UP004",
+    "UP006",
+    "UP007",
+    "UP008",
+    "UP018",
+    "UP024",
+    "UP031",
+    "UP032",
+    "UP034",
+    "UP035",
+    "UP045",
+    "W605",
+    "PLE1205",
+    "UP015",
+    "UP042",
+    "TID252",
+    "B904",
+    "B905",
+    "SIM108",
+    "SIM300",
+    "SIM910",
+    "SIM105",
+    "RET504",
+    "RET505",
+    "RET507",
+    "RET502",
+    "W291",
+    "E402",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Vendored third-party model code: keep upstream style untouched.
+"iopaint/model/**" = ["ALL"]
+"iopaint/plugins/anime_seg.py" = ["ALL"]
+"iopaint/plugins/basicsr/**" = ["ALL"]
+"iopaint/plugins/briarmbg*.py" = ["ALL"]
+"iopaint/plugins/facexlib/**" = ["ALL"]
+"iopaint/plugins/gfpgan/**" = ["ALL"]
+"iopaint/plugins/gfpgan_plugin.py" = ["ALL"]
+"iopaint/plugins/gfpganer.py" = ["ALL"]
+"iopaint/plugins/interactive_seg.py" = ["ALL"]
+"iopaint/plugins/realesrgan.py" = ["ALL"]
+"iopaint/plugins/remove_bg.py" = ["ALL"]
+"iopaint/plugins/restoreformer.py" = ["ALL"]
+"iopaint/plugins/segment_anything/**" = ["ALL"]
+"iopaint/plugins/segment_anything2/**" = ["ALL"]
+
+# Tests: lower bar, focus on correctness.
+"iopaint/tests/**" = [
+    "E402",  # module level import not at top
+    "F401",  # unused import (re-exports)
+    "F811",  # redefined
+    "F841",  # unused variable
+    "ARG",   # unused arguments
+]

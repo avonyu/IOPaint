@@ -17,6 +17,8 @@ import warnings
 
 warnings.simplefilter("ignore", UserWarning)
 
+_logger = logging.getLogger(__name__)
+
 
 def fix_window_pytorch():
     # copy from: https://github.com/comfyanonymous/ComfyUI/blob/5cbaa9e07c97296b536f240688f5a19300ecf30d/fix_torch.py#L4
@@ -26,7 +28,8 @@ def fix_window_pytorch():
         if platform.system() != "Windows":
             return
         torch_spec = importlib.util.find_spec("torch")
-        for folder in torch_spec.submodule_search_locations:
+        assert torch_spec is not None  # narrow Optional[ModuleSpec] for type checker
+        for folder in torch_spec.submodule_search_locations or []:
             lib_folder = os.path.join(folder, "lib")
             test_file = os.path.join(lib_folder, "fbgemm.dll")
             dest = os.path.join(lib_folder, "libomp140.x86_64.dll")
@@ -38,12 +41,12 @@ def fix_window_pytorch():
                 if b"libomp140.x86_64.dll" not in contents:
                     break
             try:
-                mydll = ctypes.cdll.LoadLibrary(test_file)
+                ctypes.cdll.LoadLibrary(test_file)
             except FileNotFoundError:
-                logging.warning("Detected pytorch version with libomp issue, patching.")
+                _logger.warning("Detected pytorch version with libomp issue, patching.")
                 shutil.copyfile(os.path.join(lib_folder, "libiomp5md.dll"), dest)
-    except:
-        pass
+    except Exception:
+        _logger.debug("fix_window_pytorch skipped", exc_info=True)
 
 
 def entry_point():

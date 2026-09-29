@@ -33,7 +33,7 @@ def cli_download_model(model: str):
         logger.info("Done.")
     else:
         logger.info(f"Downloading model from Huggingface: {model}")
-        from diffusers import DiffusionPipeline
+        from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
         downloaded_path = handle_from_pretrained_exceptions(
             DiffusionPipeline.download, pretrained_model_name=model, variant="fp16"
@@ -51,7 +51,9 @@ def get_sd_model_type(model_abs_path: str) -> Optional[ModelType]:
         model_type = ModelType.DIFFUSERS_SD_INPAINT
     else:
         # load once to check num_in_channels
-        from diffusers import StableDiffusionInpaintPipeline
+        from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_inpaint import (
+    StableDiffusionInpaintPipeline,
+)
 
         try:
             StableDiffusionInpaintPipeline.from_single_file(
@@ -79,7 +81,9 @@ def get_sdxl_model_type(model_abs_path: str) -> Optional[ModelType]:
         model_type = ModelType.DIFFUSERS_SDXL_INPAINT
     else:
         # load once to check num_in_channels
-        from diffusers import StableDiffusionXLInpaintPipeline
+        from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl_inpaint import (
+    StableDiffusionXLInpaintPipeline,
+)
 
         try:
             model = StableDiffusionXLInpaintPipeline.from_single_file(

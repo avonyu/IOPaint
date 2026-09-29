@@ -33,16 +33,16 @@ class FileManager:
         self.app.add_api_route("/api/v1/media_thumbnail_file", self.api_media_thumbnail_file, methods=["GET"])
         # fmt: on
 
-    def api_medias(self, tab: MediaTab) -> List[MediasResponse]:
+    async def api_medias(self, tab: MediaTab) -> List[MediasResponse]:
         img_dir = self._get_dir(tab)
         return self._media_names(img_dir)
 
-    def api_media_file(self, tab: MediaTab, filename: str) -> FileResponse:
+    async def api_media_file(self, tab: MediaTab, filename: str) -> FileResponse:
         file_path = self._get_file(tab, filename)
         return FileResponse(file_path, media_type="image/png")
 
     # tab=${tab}?filename=${filename.name}?width=${width}&height=${height}
-    def api_media_thumbnail_file(
+    async def api_media_thumbnail_file(
         self, tab: MediaTab, filename: str, width: int, height: int
     ) -> FileResponse:
         img_dir = self._get_dir(tab)
@@ -201,10 +201,7 @@ class FileManager:
         return "JPEG"
 
     def _create_thumbnail(self, image, size, crop="fit", background=None):
-        try:
-            resample = Image.Resampling.LANCZOS
-        except AttributeError:  # pylint: disable=raise-missing-from
-            resample = Image.ANTIALIAS
+        resample = Image.Resampling.LANCZOS
 
         if crop == "fit":
             image = ImageOps.fit(image, size, resample)

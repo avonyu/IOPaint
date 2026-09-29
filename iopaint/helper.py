@@ -66,7 +66,7 @@ def download_model(url, model_md5: str = None):
                     logger.error(
                         f"Model md5: {_md5}, expected md5: {model_md5}, please delete {cached_file} and restart iopaint."
                     )
-                exit(-1)
+                sys.exit(-1)
 
     return cached_file
 
@@ -95,7 +95,7 @@ def handle_error(model_path, model_md5, e):
             f"Failed to load model {model_path},"
             f"please submit an issue at https://github.com/Sanster/lama-cleaner/issues and include a screenshot of the error:\n{e}"
         )
-    exit(-1)
+    sys.exit(-1)
 
 
 def load_jit_model(url_or_path, device, model_md5: str):
@@ -267,7 +267,7 @@ def boxes_from_mask(mask: np.ndarray) -> List[np.ndarray]:
     return boxes
 
 
-def only_keep_largest_contour(mask: np.ndarray) -> List[np.ndarray]:
+def only_keep_largest_contour(mask: np.ndarray) -> np.ndarray:
     """
     Args:
         mask: (h, w)  0~255
@@ -288,7 +288,7 @@ def only_keep_largest_contour(mask: np.ndarray) -> List[np.ndarray]:
 
     if max_index != -1:
         new_mask = np.zeros_like(mask)
-        return cv2.drawContours(new_mask, contours, max_index, 255, -1)
+        return cv2.drawContours(new_mask, contours, max_index, (255, 255, 255), -1)
     else:
         return mask
 
