@@ -1,4 +1,5 @@
 import asyncio
+import anyio  # imported so it can be placed on rich's silent list
 import base64
 import io
 import os
@@ -33,7 +34,9 @@ from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+import starlette  # imported so it can be placed on rich's silent list
 from loguru import logger
+from rich.console import Console
 from socketio import AsyncServer
 
 from iopaint.file_manager import FileManager
@@ -118,18 +121,8 @@ def _cache_batch(batch_id: str, files: "OrderedDict[str, bytes]") -> None:
 
 
 def api_middleware(app: FastAPI):
-    console = None
-    rich_available = False
-    try:
-        if os.environ.get("WEBUI_RICH_EXCEPTIONS", None) is not None:
-            import anyio  # importing just so it can be placed on silent list
-            import starlette  # importing just so it can be placed on silent list
-            from rich.console import Console
-
-            console = Console()
-            rich_available = True
-    except Exception:
-        pass
+    rich_enabled = os.environ.get("WEBUI_RICH_EXCEPTIONS", None) is not None
+    console = Console() if rich_enabled else None
 
     def handle_exception(request: Request, e: Exception):
         err = {
@@ -142,7 +135,7 @@ def api_middleware(app: FastAPI):
             e, HTTPException
         ):  # do not print backtrace on known httpexceptions
             message = f"API error: {request.method}: {request.url} {err}"
-            if rich_available:
+            if console is not None:
                 print(message)
                 console.print_exception(
                     show_locals=True,
