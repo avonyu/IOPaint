@@ -19,7 +19,7 @@ from iopaint.schema import (
 
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
-from datetime import datetime
+from datetime import UTC, datetime
 from json import JSONDecodeError
 
 import gradio as gr
@@ -28,7 +28,7 @@ from loguru import logger
 
 from iopaint.const import *
 
-_config_file: Path = None
+_config_file: Path | None = None
 
 default_configs = dict(
     host="127.0.0.1",
@@ -124,14 +124,15 @@ def save_config(
     if config.input and not os.path.exists(config.input):
         return "[Error] Input file or directory does not exist"
 
-    current_time = datetime.now().strftime("%H:%M:%S")
-    msg = f"[{current_time}] Successful save config to: {str(_config_file.absolute())}"
+    assert _config_file is not None  # narrowed by check above
+    current_time = datetime.now(tz=UTC).strftime("%H:%M:%S")
+    msg = f"[{current_time}] Successful save config to: {_config_file.absolute()!s}"
     logger.info(msg)
     try:
         with open(_config_file, "w", encoding="utf-8") as f:
             f.write(config.model_dump_json(indent=4))
-    except Exception as e:
-        return f"Save configure file failed: {str(e)}"
+    except Exception as e:  # noqa: BLE001 - report any write failure to the user
+        return f"Save configure file failed: {e!s}"
     return msg
 
 

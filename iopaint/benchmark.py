@@ -17,7 +17,7 @@ try:
     torch._C._jit_override_can_fuse_on_gpu(False)
     torch._C._jit_set_texpr_fuser_enabled(False)
     torch._C._jit_set_nvfuser_enabled(False)
-except:
+except Exception:  # noqa: BLE001 - torch private API may not exist on all builds
     pass
 
 NUM_THREADS = str(4)
@@ -36,7 +36,7 @@ def run_model(model, size):
     image = np.random.randint(0, 256, (size[0], size[1], 3)).astype(np.uint8)
     mask = np.random.randint(0, 255, size).astype(np.uint8)
 
-    config = InpaintRequest(
+    config = InpaintRequest(  # type: ignore[call-arg]
         ldm_steps=2,
         hd_strategy=HDStrategy.ORIGINAL,
         hd_strategy_crop_margin=128,
@@ -64,7 +64,6 @@ def benchmark(model, times: int, empty_cache: bool):
     for size in sizes:
         torch.cuda.empty_cache()
         time_metrics = []
-        cpu_metrics = []
         memory_metrics = []
         gpu_memory_metrics = []
         for _ in range(times):

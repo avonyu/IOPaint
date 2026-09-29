@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -48,20 +49,20 @@ def batch_inpaint(
         logger.error(
             "invalid --output: when image is a directory, output should be a directory"
         )
-        exit(-1)
+        sys.exit(-1)
     output.mkdir(parents=True, exist_ok=True)
 
     image_paths = glob_images(image)
     mask_paths = glob_images(mask)
     if len(image_paths) == 0:
         logger.error("invalid --image: empty image folder")
-        exit(-1)
+        sys.exit(-1)
     if len(mask_paths) == 0:
         logger.error("invalid --mask: empty mask folder")
-        exit(-1)
+        sys.exit(-1)
 
     if config is None:
-        inpaint_request = InpaintRequest()
+        inpaint_request = InpaintRequest()  # type: ignore[call-arg]
         logger.info(f"Using default config: {inpaint_request}")
     else:
         with open(config, "r", encoding="utf-8") as f:

@@ -1,3 +1,5 @@
+# ruff: noqa: B008 - typer requires Option() calls in argument defaults for introspection
+import sys
 import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -152,15 +154,15 @@ def start(
 
     if input and not input.exists():
         logger.error(f"invalid --input: {input} not exists")
-        exit(-1)
+        sys.exit(-1)
     if mask_dir and not mask_dir.exists():
         logger.error(f"invalid --mask-dir: {mask_dir} not exists")
-        exit(-1)
+        sys.exit(-1)
     if input and input.is_dir() and not output_dir:
         logger.error(
             "invalid --output-dir: --output-dir must be set when --input is a directory"
         )
-        exit(-1)
+        sys.exit(-1)
     if output_dir:
         output_dir = output_dir.expanduser().absolute()
         logger.info(f"Image will be saved to {output_dir}")

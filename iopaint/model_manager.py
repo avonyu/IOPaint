@@ -157,7 +157,7 @@ class ModelManager:
         ):
             old_brushnet_method = self.brushnet_method
             self.brushnet_method = config.brushnet_method
-            self.model.switch_brushnet_method(config.brushnet_method)
+            self.model.switch_brushnet_method(config.brushnet_method)  # type: ignore[attr-defined]
             logger.info(
                 f"Switch Brushnet method from {old_brushnet_method} to {config.brushnet_method}"
             )
@@ -201,7 +201,7 @@ class ModelManager:
         ):
             old_controlnet_method = self.controlnet_method
             self.controlnet_method = config.controlnet_method
-            self.model.switch_controlnet_method(config.controlnet_method)
+            self.model.switch_controlnet_method(config.controlnet_method)  # type: ignore[attr-defined]
             logger.info(
                 f"Switch Controlnet method from {old_controlnet_method} to {config.controlnet_method}"
             )
@@ -255,7 +255,7 @@ class ModelManager:
                 if not lcm_lora_loaded:
                     logger.info("Load LCM LORA")
                     self.model.model.load_lora_weights(
-                        self.model.lcm_lora_id,
+                        self.model.lcm_lora_id,  # type: ignore[attr-defined]
                         weight_name="pytorch_lora_weights.safetensors",
                         local_files_only=is_local_files_only(),
                     )
