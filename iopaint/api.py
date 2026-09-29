@@ -1,5 +1,4 @@
 import asyncio
-import anyio  # imported so it can be placed on rich's silent list
 import base64
 import io
 import os
@@ -10,8 +9,9 @@ import uuid
 import zipfile
 from collections import OrderedDict
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import cast
 
+import anyio  # imported so it can be placed on rich's silent list
 import cv2
 import numpy as np
 import socketio
@@ -23,55 +23,55 @@ try:
     torch._C._jit_set_texpr_fuser_enabled(False)
     torch._C._jit_set_nvfuser_enabled(False)
     torch._C._jit_set_profiling_mode(False)
-except:
+except Exception:  # noqa: BLE001, S110 - torch private API may not exist on all builds
     pass
 
+import starlette  # imported so it can be placed on rich's silent list
 import uvicorn
-from PIL import Image
 from fastapi import APIRouter, FastAPI, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-import starlette  # imported so it can be placed on rich's silent list
 from loguru import logger
+from PIL import Image
 from rich.console import Console
 from socketio import AsyncServer
 
 from iopaint.file_manager import FileManager
 from iopaint.helper import (
-    load_img,
-    decode_base64_to_image,
-    pil_to_bytes,
-    numpy_to_bytes,
-    concat_alpha_channel,
-    gen_frontend_mask,
     adjust_mask,
+    concat_alpha_channel,
+    decode_base64_to_image,
+    gen_frontend_mask,
+    load_img,
+    numpy_to_bytes,
+    pil_to_bytes,
 )
 from iopaint.model.utils import torch_gc
 from iopaint.model_manager import ModelManager
-from iopaint.plugins import build_plugins, RealESRGANUpscaler, InteractiveSeg
+from iopaint.plugins import InteractiveSeg, RealESRGANUpscaler, build_plugins
 from iopaint.plugins.base_plugin import BasePlugin
 from iopaint.plugins.remove_bg import RemoveBG
 from iopaint.schema import (
-    GenInfoResponse,
+    AdjustMaskRequest,
     ApiConfig,
-    ServerConfigResponse,
-    SwitchModelRequest,
-    InpaintRequest,
     BatchInpaintRequest,
     BatchInpaintResponse,
     BatchResultItem,
+    GenInfoResponse,
+    InpaintRequest,
+    InteractiveSegModel,
+    ModelInfo,
+    PluginInfo,
+    RealESRGANModel,
+    RemoveBGModel,
     RunPluginRequest,
     SDSampler,
-    PluginInfo,
-    AdjustMaskRequest,
-    RemoveBGModel,
+    ServerConfigResponse,
+    SwitchModelRequest,
     SwitchPluginModelRequest,
-    ModelInfo,
-    InteractiveSegModel,
-    RealESRGANModel,
 )
 
 CURRENT_DIR = Path(__file__).parent.absolute().resolve()
@@ -155,7 +155,7 @@ def api_middleware(app: FastAPI):
     async def exception_handling(request: Request, call_next):
         try:
             return await call_next(request)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - middleware must catch all to render error response
             return handle_exception(request, e)
 
     @app.exception_handler(Exception)
@@ -176,16 +176,19 @@ def api_middleware(app: FastAPI):
     app.add_middleware(CORSMiddleware, **cors_options)
 
 
-global_sio: AsyncServer = None
+global_sio: AsyncServer | None = None
 
 
-def diffuser_callback(pipe, step: int, timestep: int, callback_kwargs: Dict = {}):
+def diffuser_callback(pipe, step: int, timestep: int, callback_kwargs: dict | None = None):
     # self: DiffusionPipeline, step: int, timestep: int, callback_kwargs: Dict
     # logger.info(f"diffusion callback: step={step}, timestep={timestep}")
 
     # We use asyncio loos for task processing. Perhaps in the future, we can add a processing queue similar to InvokeAI,
     # but for now let's just start a separate event loop. It shouldn't make a difference for single person use
-    asyncio.run(global_sio.emit("diffusion_progress", {"step": step}))
+    if callback_kwargs is None:
+        callback_kwargs = {}
+    if global_sio is not None:
+        asyncio.run(global_sio.emit("diffusion_progress", {"step": step}))
     return {}
 
 
@@ -245,18 +248,18 @@ class Api:
         return self.app.add_api_route(path, endpoint, **kwargs)
 
     def api_save_image(self, file: UploadFile):
-        # Sanitize filename to prevent path traversal
-        safe_filename = Path(file.filename).name  # Get just the filename component
-
-        # Construct the full path within output_dir
-        output_path = self.config.output_dir / safe_filename
-
         # Ensure output directory exists
         if not self.config.output_dir or not self.config.output_dir.exists():
             raise HTTPException(
                 status_code=400,
                 detail="Output directory not configured or doesn't exist",
             )
+
+        # Sanitize filename to prevent path traversal
+        safe_filename = Path(str(file.filename)).name  # Get just the filename component
+
+        # Construct the full path within output_dir
+        output_path = self.config.output_dir / safe_filename
 
         # Read and write the file
         origin_image_bytes = file.file.read()
@@ -278,9 +281,9 @@ class Api:
             if req.plugin_name == RemoveBG.name:
                 self.config.remove_bg_model = req.model_name
             if req.plugin_name == RealESRGANUpscaler.name:
-                self.config.realesrgan_model = req.model_name
+                self.config.realesrgan_model = cast(RealESRGANModel, req.model_name)
             if req.plugin_name == InteractiveSeg.name:
-                self.config.interactive_seg_model = req.model_name
+                self.config.interactive_seg_model = cast(InteractiveSegModel, req.model_name)
             torch_gc()
 
     def api_server_config(self) -> ServerConfigResponse:
@@ -297,7 +300,7 @@ class Api:
         return ServerConfigResponse(
             plugins=plugins,
             modelInfos=self.model_manager.scan_models(),
-            removeBGModel=self.config.remove_bg_model,
+            removeBGModel=cast(RemoveBGModel, self.config.remove_bg_model),
             removeBGModels=RemoveBGModel.values(),
             realesrganModel=self.config.realesrgan_model,
             realesrganModels=RealESRGANModel.values(),
@@ -321,7 +324,7 @@ class Api:
         raise HTTPException(status_code=404, detail="Input image not found")
 
     def api_geninfo(self, file: UploadFile) -> GenInfoResponse:
-        _, _, info = load_img(file.file.read(), return_info=True)
+        _np_img, _alpha, info = load_img(file.file.read(), return_info=True)  # type: ignore[misc]
         parts = info.get("parameters", "").split("Negative prompt: ")
         prompt = parts[0].strip()
         negative_prompt = ""
@@ -330,6 +333,11 @@ class Api:
         return GenInfoResponse(prompt=prompt, negative_prompt=negative_prompt)
 
     def api_inpaint(self, req: InpaintRequest):
+        if not req.image or not req.mask:
+            raise HTTPException(
+                status_code=400,
+                detail="Both 'image' and 'mask' must be provided as base64 strings.",
+            )
         image, alpha_channel, infos, ext = decode_base64_to_image(req.image)
         mask, _, _, _ = decode_base64_to_image(req.mask, gray=True)
         logger.info(f"image ext: {ext}")
@@ -381,14 +389,14 @@ class Api:
         anchor_bottom = anchor in ("bottomleft", "bottomright")
 
         total = len(req.images)
-        used_names: Dict[str, int] = {}
-        results: List[BatchResultItem] = []
-        files: "OrderedDict[str, bytes]" = OrderedDict()
+        used_names: dict[str, int] = {}
+        results: list[BatchResultItem] = []
+        files: OrderedDict[str, bytes] = OrderedDict()
 
         for index, image_base64 in enumerate(req.images):
             try:
                 image, alpha_channel, infos, _ext = decode_base64_to_image(image_base64)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - skip malformed images instead of failing the whole batch
                 logger.warning(f"Skip invalid image at index {index}: {e}")
                 continue
 
@@ -508,7 +516,7 @@ class Api:
             media_type="image/png",
         )
 
-    def api_samplers(self) -> List[str]:
+    def api_samplers(self) -> list[str]:
         return [member.value for member in SDSampler.__members__.values()]
 
     def api_adjust_mask(self, req: AdjustMaskRequest):
@@ -525,8 +533,12 @@ class Api:
             timeout_keep_alive=999999999,
         )
 
-    def _build_file_manager(self) -> Optional[FileManager]:
+    def _build_file_manager(self) -> FileManager | None:
         if self.config.input and self.config.input.is_dir():
+            if self.config.mask_dir is None or self.config.output_dir is None:
+                raise ValueError(
+                    "mask_dir and output_dir must be configured when input is a directory."
+                )
             logger.info(
                 f"Input is directory, initialize file manager {self.config.input}"
             )
@@ -539,7 +551,7 @@ class Api:
             )
         return None
 
-    def _build_plugins(self) -> Dict[str, BasePlugin]:
+    def _build_plugins(self) -> dict[str, BasePlugin]:
         return build_plugins(
             self.config.enable_interactive_seg,
             self.config.interactive_seg_model,
