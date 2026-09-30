@@ -953,13 +953,20 @@ export default function Editor(props: EditorProps) {
   };
 
   const renderInteractiveSegCursor = () => {
+    // Match the colour of the point that a click will add, so the cursor
+    // tells you up front whether you are about to paint foreground (green)
+    // or subtract from it (red).
+    const isPositive = interactiveSegState.nextClickLabel === 1;
+    const color = isPositive ? "21, 215, 121" : "237, 49, 55";
     return (
       <div
-        className="absolute h-[20px] w-[20px] pointer-events-none rounded-[50%] bg-[rgba(21,_215,_121,_0.936)] [box-shadow:0_0_0_0_rgba(21,_215,_121,_0.936)] animate-pulse"
+        className="absolute h-[20px] w-[20px] pointer-events-none rounded-[50%] animate-pulse"
         style={{
           left: `${x}px`,
           top: `${y}px`,
           transform: "translate(-50%, -50%)",
+          backgroundColor: `rgba(${color}, 0.936)`,
+          boxShadow: `0 0 0 0 rgba(${color}, 0.936)`,
         }}
       >
         <CursorArrowRaysIcon />
