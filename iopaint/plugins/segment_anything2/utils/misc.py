@@ -6,9 +6,44 @@
 
 import warnings
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
+
+
+def get_connected_components(mask: torch.Tensor):
+    """Label connected components of a batch of 1-channel boolean masks.
+
+    CPU/numpy implementation of the upstream helper (which relies on a
+    custom CUDA op that is not vendored here). Returns ``(labels, areas)``
+    where ``labels`` is int32 with 0 = background and ``areas`` maps every
+    label id (including 0) to its pixel count.
+    """
+    if mask.ndim == 4:
+        b, c, h, w = mask.shape
+        assert c == 1, f"Expected 1-channel masks, got {c}"
+    elif mask.ndim == 3:
+        b, h, w = mask.shape
+    else:
+        raise ValueError(f"Unsupported mask shape {tuple(mask.shape)}")
+
+    arr = mask.detach().to(torch.uint8).cpu().numpy()
+    # Flatten batch and channel into one image stack, label per-image.
+    flat = arr.reshape(b, h, w)
+    labels_out = np.zeros((b, h, w), dtype=np.int32)
+    areas_out = []
+
+    for i in range(b):
+        binary = (flat[i] > 0).astype(np.uint8)
+        num, lab = cv2.connectedComponents(binary, connectivity=8)
+        labels_out[i] = lab
+        counts = np.bincount(lab.ravel(), minlength=num)
+        areas_out.append(counts)
+
+    # area threshold index 0 is the background
+    areas_out = torch.from_numpy(np.stack(areas_out)).to(mask.device)
+    return torch.from_numpy(labels_out).to(mask.device), areas_out
 
 
 def get_sdpa_settings():

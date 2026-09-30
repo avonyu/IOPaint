@@ -394,18 +394,54 @@ def adjust_mask(mask: np.ndarray, kernel_size: int, operate):
     return res_mask
 
 
-def gen_frontend_mask(bgr_or_gray_mask):
+def gen_frontend_mask(bgr_or_gray_mask, dilate=True):
+    """Render a backend mask into the RGBA overlay the frontend draws on top.
+
+    ``dilate=True`` (default, brush path): the user's hand-drawn mask is
+    sharpened with a 9x9 dilation so the brush outline is clearly visible.
+
+    ``dilate=False`` (interactive seg path): we feed in SAM2's float
+    probability map directly and let the alpha channel encode sub-pixel
+    confidence, so the outline tracks the object edge instead of the
+    dilation kernel.
+    """
+    is_float = bgr_or_gray_mask.dtype == np.float32 or bgr_or_gray_mask.dtype == np.float64
+
+    if is_float:
+        # SAM2 image predictor returns high-res logits in [0, 1]. Skip the
+        # dilation (which would inflate the outline by ~4 px) and push the
+        # float values straight into the alpha channel so the browser can
+        # anti-alias the edge.
+        if bgr_or_gray_mask.ndim == 3:
+            bgr_or_gray_mask = bgr_or_gray_mask[..., 0]
+        alpha = np.clip(bgr_or_gray_mask, 0.0, 1.0)
+        alpha_u8 = (alpha * 255).astype(np.uint8)
+        h, w = alpha_u8.shape
+        res_mask = np.zeros((h, w, 4), dtype=np.uint8)
+        # fronted brush color "ffcc00bb" — keep the same yellow the brush
+        # mask uses so the two paths look consistent.
+        res_mask[..., 0] = 255  # R
+        res_mask[..., 1] = 203  # G
+        res_mask[..., 2] = 0    # B
+        # Alpha is the probability map itself; brush overlay used 0.73
+        # (~186/255). Use a slightly higher base so the SAM2 edge reads
+        # clearly even on bright backgrounds, but multiply by the
+        # probability so the rim stays semi-transparent.
+        res_mask[..., 3] = (alpha_u8.astype(np.uint16) * 186 // 255).astype(np.uint8)
+        return cv2.cvtColor(res_mask, cv2.COLOR_BGRA2RGBA)
+
     if len(bgr_or_gray_mask.shape) == 3 and bgr_or_gray_mask.shape[2] != 1:
         bgr_or_gray_mask = cv2.cvtColor(bgr_or_gray_mask, cv2.COLOR_BGR2GRAY)
 
-    # fronted brush color "ffcc00bb"
-    # TODO: how to set kernel size?
-    kernel_size = 9
-    bgr_or_gray_mask = cv2.dilate(
-        bgr_or_gray_mask,
-        np.ones((kernel_size, kernel_size), np.uint8),
-        iterations=1,
-    )
+    if dilate:
+        # fronted brush color "ffcc00bb"
+        # TODO: how to set kernel size?
+        kernel_size = 9
+        bgr_or_gray_mask = cv2.dilate(
+            bgr_or_gray_mask,
+            np.ones((kernel_size, kernel_size), np.uint8),
+            iterations=1,
+        )
     res_mask = np.zeros(
         (bgr_or_gray_mask.shape[0], bgr_or_gray_mask.shape[1], 4), dtype=np.uint8
     )

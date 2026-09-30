@@ -408,6 +408,40 @@ export const generateMask = (
   return maskCanvas
 }
 
+/**
+ * The SAM2 interactive-seg preview is an RGBA PNG with float-alpha edges
+ * (so the outline is anti-aliased). When the user accepts it, we hand it
+ * over to the inpaint pipeline, which only knows how to consume a clean
+ * uint8 white-on-black mask — so we keep a binary version alongside the
+ * RGBA preview. These helpers attach / read the binary side-channel.
+ */
+
+// Augment the global Window object with the runInteractiveSeg binding the
+// Editor mounts so the InteractiveSeg toolbar can re-run SAM2 without a
+// store dependency cycle.
+declare global {
+  interface Window {
+    __iopaintRunInteractiveSeg?: (clicks: number[][]) => Promise<void>
+  }
+}
+const BINARY_MASK = Symbol("iopaintInteractiveSegBinaryMask")
+
+export const attachBinaryMask = (
+  preview: HTMLImageElement,
+  binary: HTMLImageElement
+): void => {
+  const target = preview as unknown as Record<symbol, HTMLImageElement>
+  target[BINARY_MASK] = binary
+}
+
+export const getBinaryMask = (
+  preview: HTMLImageElement
+): HTMLImageElement | undefined => {
+  return (preview as unknown as Record<symbol, HTMLImageElement | undefined>)[
+    BINARY_MASK
+  ]
+}
+
 export const convertToBase64 = (fileOrBlob: File | Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()

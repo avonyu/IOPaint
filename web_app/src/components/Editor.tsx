@@ -26,6 +26,7 @@ import {
   isRightClick,
   mouseXY,
   srcToFile,
+  attachBinaryMask,
 } from "@/lib/utils";
 import {
   Eraser,
@@ -461,6 +462,9 @@ export default function Editor(props: EditorProps) {
   };
 
   const runInteractiveSeg = async (newClicks: number[][]) => {
+    // Expose to the InteractiveSeg toolbar so the cleanup slider can
+    // re-run SAM2 without firing a fake click on the canvas.
+    window.__iopaintRunInteractiveSeg = runInteractiveSeg;
     updateAppState({ isPluginRunning: true });
     const targetFile = await getCurrentRender();
     try {
@@ -470,10 +474,67 @@ export default function Editor(props: EditorProps) {
         targetFile,
         undefined,
         newClicks,
+        interactiveSegState.segGrowRadius,
       );
       const { blob } = res;
       const img = new Image();
       img.onload = () => {
+        // Build a yellow-on-transparent overlay that matches the brush
+        // preview (#ffcc00bb) so the canvas pipeline treats it the same way
+        // — opaque enough to see clearly, transparent enough to still see
+        // the photo underneath. Without this, the user would see the photo
+        // hidden behind the alpha-255 binary image after Accept.
+        const w = img.naturalWidth || imageWidth;
+        const h = img.naturalHeight || imageHeight;
+        const bin = document.createElement("canvas");
+        bin.width = w;
+        bin.height = h;
+        const bctx = bin.getContext("2d");
+        if (bctx) {
+          bctx.imageSmoothingEnabled = true;
+          bctx.imageSmoothingQuality = "high";
+          bctx.drawImage(img, 0, 0, w, h);
+          // Re-color every pixel: where the SAM2 preview was opaque
+          // yellow, draw the brush yellow (#ffcc00 with alpha 186);
+          // elsewhere keep transparent so the photo still shows through.
+          const data = bctx.getImageData(0, 0, w, h).data;
+          const out = bctx.createImageData(w, h);
+          // The preview alpha is ``prob * 186``, so 0.5 probability maps to
+          // 93. Threshold at half of the full-strength alpha (186/2) to get
+          // the model's actual 0.5 decision boundary — anything less would
+          // inflate the mask, anything more would erode it.
+          const CUT = 93;
+          for (let i = 0; i < data.length; i += 4) {
+            const a = data[i + 3]; // SAM2 preview alpha (0..186)
+            if (a >= CUT) {
+              // Match the brush preview colour so the SAM2 mask blends
+              // visually with hand-drawn strokes.
+              out.data[i] = 0xff;       // R = 255
+              out.data[i + 1] = 0xcc;   // G = 204
+              out.data[i + 2] = 0x00;   // B = 0
+              out.data[i + 3] = 0xbb;   // A = 187 (0.73)
+            } else {
+              // Fully transparent so the photo still shows through; this is
+              // also what the inpaint backend reads as background once the
+              // RGBA is flattened to grayscale.
+              out.data[i] = 0;
+              out.data[i + 1] = 0;
+              out.data[i + 2] = 0;
+              out.data[i + 3] = 0;
+            }
+          }
+          bctx.putImageData(out, 0, 0);
+        }
+        // Synchronously attach the binary overlay so Accept can never race
+        // against the Image decode. We re-use the same offscreen canvas as
+        // the source for an HTMLImageElement — toDataURL is sync, so the
+        // resulting <img> is decoded inline by the browser on first paint
+        // and is guaranteed to be ready by the time the user can click
+        // Accept (Accept only becomes enabled once this whole onload has
+        // run, so there is no async gap).
+        const binImg = new Image()
+        binImg.src = bin.toDataURL("image/png")
+        attachBinaryMask(img, binImg)
         updateInteractiveSegState({ tmpInteractiveSegMask: img });
       };
       img.src = blob;
@@ -485,6 +546,27 @@ export default function Editor(props: EditorProps) {
     }
     updateAppState({ isPluginRunning: false });
   };
+
+  // Re-run SAM2 when the user removes a click. removeClickAt bumps the
+  // revision token, so we watch it instead of recomputing on every
+  // clicks[] reference change (which would also fire for normal adds and
+  // cause a double-fetch).
+  useEffect(() => {
+    if (!interactiveSegState.isInteractiveSeg) {
+      return;
+    }
+    if (interactiveSegState.revisionToken === 0) {
+      return;
+    }
+    if (interactiveSegState.clicks.length === 0) {
+      return;
+    }
+    void runInteractiveSeg(interactiveSegState.clicks);
+    // Intentionally exclude runInteractiveSeg from deps to avoid stale
+    // closures; the function only depends on imageWidth/Height which are
+    // captured each render through the closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interactiveSegState.revisionToken]);
 
   const onPointerUp = (ev: SyntheticEvent) => {
     if (isMidClick(ev)) {
@@ -549,11 +631,16 @@ export default function Editor(props: EditorProps) {
     if (interactiveSegState.isInteractiveSeg) {
       const xy = mouseXY(ev);
       const newClicks: number[][] = [...interactiveSegState.clicks];
+      // Right-click always counts as a negative prompt regardless of the
+      // toolbar toggle (matches the convention used by SAM demos).
+      // Otherwise honour the toggle in the InteractiveSeg toolbar.
+      let label: 0 | 1;
       if (isRightClick(ev)) {
-        newClicks.push([xy.x, xy.y, 0, newClicks.length]);
+        label = 0;
       } else {
-        newClicks.push([xy.x, xy.y, 1, newClicks.length]);
+        label = interactiveSegState.nextClickLabel;
       }
+      newClicks.push([xy.x, xy.y, label, newClicks.length]);
       runInteractiveSeg(newClicks);
       updateInteractiveSegState({ clicks: newClicks });
     }
@@ -922,6 +1009,8 @@ export default function Editor(props: EditorProps) {
                 if (r && !imageContext) {
                   const ctx = r.getContext("2d");
                   if (ctx) {
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = "high";
                     setImageContext(ctx);
                   }
                 }
@@ -960,6 +1049,11 @@ export default function Editor(props: EditorProps) {
                 if (r && !context) {
                   const ctx = r.getContext("2d");
                   if (ctx) {
+                    // Anti-alias mask edges so the SAM2 outline (which is
+                    // now a float-alpha PNG) blends smoothly against the
+                    // image layer instead of showing staircase pixels.
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = "high";
                     setContext(ctx);
                   }
                 }

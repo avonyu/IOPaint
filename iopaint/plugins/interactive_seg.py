@@ -1,6 +1,7 @@
 import hashlib
 from typing import List
 
+import cv2
 import numpy as np
 import torch
 from loguru import logger
@@ -78,6 +79,74 @@ SEGMENT_ANYTHING_MODELS = {
 }
 
 
+def _keep_clicked_components(
+    binary: np.ndarray, points: List[List[float]], labels: List[int]
+) -> np.ndarray:
+    """Drop foreground blobs that no positive click landed on.
+
+    SAM sometimes returns a few stray specks far from the object (e.g. a
+    patch of background that scored just above the threshold). Those specks
+    would otherwise be inpaint targets the user never asked for. We keep
+    only the components that contain at least one positive prompt, which is
+    exactly the set the user indicated.
+    """
+    if binary.max() == 0:
+        return binary
+
+    num, comp = cv2.connectedComponents(binary, connectivity=8)
+    if num <= 2:  # only background + one component
+        return binary
+
+    keep = np.zeros(num, dtype=bool)
+    h, w = binary.shape
+    for (x, y), label in zip(points, labels):
+        if label != 1:
+            continue
+        # Clamp: a click can land a pixel outside the frame after zooming.
+        xi = int(np.clip(round(float(x)), 0, w - 1))
+        yi = int(np.clip(round(float(y)), 0, h - 1))
+        cid = comp[yi, xi]
+        if cid != 0:
+            keep[cid] = True
+
+    if not keep.any():
+        # No positive click landed inside the mask (e.g. only negative
+        # points, or all clicks missed). Fall back to keeping the largest
+        # component rather than returning an empty selection.
+        areas = np.bincount(comp.ravel(), minlength=num)
+        areas[0] = 0
+        keep[int(np.argmax(areas))] = True
+
+    return keep[comp].astype(np.uint8)
+
+
+def _fill_enclosed_holes(binary: np.ndarray) -> np.ndarray:
+    """Fill background regions fully enclosed by the mask.
+
+    A hole is a connected background component that does not reach the image
+    border. Those are pinholes produced by noisy logits inside the object
+    (eyes, nostrils, fabric gaps, hair strands) and are never intentional.
+    Background that touches the border is genuine outside area and is kept.
+    """
+    if binary.max() == 0:
+        return binary
+
+    # Flood the background inwards from the border; whatever background is
+    # not reached is enclosed.
+    h, w = binary.shape
+    # Pad by 1 so the flood starts outside the image and covers all edges.
+    inv = np.pad(1 - binary, 1, mode="constant", constant_values=1)
+    ff_mask = np.zeros((h + 4, w + 4), dtype=np.uint8)
+    # Seed at the padded corner; newVal=0 marks "outside-connected" pixels.
+    cv2.floodFill(inv, ff_mask, (0, 0), 0)
+    # After the fill, `inv` is 0 where the background connects to the border
+    # and still 1 inside enclosed holes.
+    holes = inv[1:-1, 1:-1] > 0
+    out = binary.copy()
+    out[holes] = 1
+    return out
+
+
 class InteractiveSeg(BasePlugin):
     name = "InteractiveSeg"
     support_gen_mask = True
@@ -121,10 +190,10 @@ class InteractiveSeg(BasePlugin):
 
     def gen_mask(self, rgb_np_img, req: RunPluginRequest) -> np.ndarray:
         img_md5 = hashlib.md5(req.image.encode("utf-8")).hexdigest()
-        return self.forward(rgb_np_img, req.clicks, img_md5)
+        return self.forward(rgb_np_img, req.clicks, img_md5, req.seg_grow_radius)
 
     @torch.inference_mode()
-    def forward(self, rgb_np_img, clicks: List[List], img_md5: str):
+    def forward(self, rgb_np_img, clicks: List[List], img_md5: str, grow_radius: int = 0):
         input_point = []
         input_label = []
         for click in clicks:
@@ -137,10 +206,76 @@ class InteractiveSeg(BasePlugin):
             self.prev_img_md5 = img_md5
             self.predictor.set_image(rgb_np_img)
 
-        masks, _, _ = self.predictor.predict(
+        # ``return_logits=True`` is essential: without it the predictor
+        # hard-thresholds the mask (``masks > 0``) and hands back a 0/1 array,
+        # which throws away every bit of sub-pixel edge information and makes
+        # the overlay look like 1-pixel stair-steps. With logits we get the
+        # model's real confidence field and can build a smooth alpha ramp.
+        #
+        # ``multimask_output=True`` matters just as much. A bare click is an
+        # *ambiguous* prompt, and upstream's own demo only uses ``False`` for
+        # non-ambiguous (multi-point) prompts. With ``False`` the decoder
+        # returns the single-mask token, which is the weakest of the three
+        # heads and leaves the logits hovering around 0 across low-contrast
+        # regions -- that is what punches pinholes through the middle of the
+        # selection. With ``True`` we get all three candidates plus the
+        # model's own quality score, so we can pick the best one.
+        masks, scores, _ = self.predictor.predict(
             point_coords=np.array(input_point),
             point_labels=np.array(input_label),
-            multimask_output=False,
+            multimask_output=True,
+            return_logits=True,
         )
-        mask = masks[0].astype(np.uint8) * 255
-        return mask
+        # Pick the highest-scoring candidate, as upstream does.
+        best = int(np.argmax(np.asarray(scores).reshape(-1)))
+        logits = masks[best]
+        if logits.ndim == 3:
+            logits = logits[0]
+        logits = logits.astype(np.float32)
+
+        # ---- Enforce a contiguous mask -------------------------------
+        # SAM's logits are noisy around ambiguous regions (hair strands,
+        # fabric texture, facial features). Thresholding them directly
+        # punches pinholes through the middle of the object, which is
+        # never what the user wants when they clicked "select this
+        # thing". We therefore clean the *binary decision* by
+        # connectivity, and only use the logits to anti-alias the
+        # resulting outline.
+        binary = (logits > 0.0).astype(np.uint8)
+        binary = _keep_clicked_components(binary, input_point, input_label)
+        binary = _fill_enclosed_holes(binary)
+
+        if grow_radius > 0:
+            # Grow the selection past the object's own silhouette.
+            #
+            # A mask that ends exactly on the subject boundary gives the
+            # inpainter no pixels of the object to work from, so it has to
+            # guess where the true edge was -- that is what leaves a coloured
+            # halo around the result. Overlapping the subject by a few pixels
+            # gives the model real foreground context and the seam disappears.
+            k = 2 * int(grow_radius) + 1
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+            binary = cv2.dilate(binary, kernel, iterations=1)
+
+        # Soft alpha: solid inside the cleaned region, clear outside, with a
+        # ~1 px ramp along the contour so the browser can anti-alias it.
+        #
+        # The ramp is derived from a *signed distance* to the cleaned outline
+        # rather than from the raw logits. Deriving it from the logits looks
+        # tempting but is wrong: the holes we just filled have strongly
+        # negative logits, so a logit-derived alpha would drop them again the
+        # moment anything downstream re-thresholds at 0.5. Distance keeps the
+        # cleaned topology authoritative and confines the softness to the
+        # boundary, which is the only place it is wanted.
+        # Start fully opaque inside the cleaned region...
+        alpha = binary.astype(np.float32)
+        # ...then feather only the outermost ring of the boundary, so the
+        # contour gets a one-pixel anti-aliased ramp while the interior stays
+        # solid. Using an explicit ring (rather than a signed-distance ramp)
+        # matters because a distance transform on a binary mask jumps from
+        # ~-0.96 straight to ~+0.96 across the border and yields no
+        # intermediate values to interpolate.
+        eroded = cv2.erode(binary, np.ones((3, 3), np.uint8), iterations=1)
+        boundary = (binary > 0) & (eroded == 0)
+        alpha[boundary] = 0.5
+        return np.clip(alpha, 0.0, 1.0).astype(np.float32)

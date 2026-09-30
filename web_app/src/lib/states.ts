@@ -35,6 +35,7 @@ import {
   convertToBase64,
   dataURItoBlob,
   generateMask,
+  getBinaryMask,
   getImageFileSize,
   loadImage,
   shiftMaskImage,
@@ -128,6 +129,21 @@ type InteractiveSegState = {
   isInteractiveSeg: boolean
   tmpInteractiveSegMask: HTMLImageElement | null
   clicks: number[][]
+  // 0 = negative point (force background), 1 = positive point (force
+  // foreground). Persists across clicks so the user can keep painting the
+  // same kind without toggling. Right-click in the editor still flips to
+  // negative for power users.
+  nextClickLabel: 0 | 1
+  // Monotonic counter — bumped whenever the click set changes in a way the
+  // Editor component needs to react to (e.g. a click was removed). The
+  // Editor watches it and re-runs SAM2 so the preview stays in sync.
+  revisionToken: number
+  // Radius (px) the SAM2 mask is dilated outward by before it is rendered and
+  // sent to inpainting. The inpainter needs the mask to overlap the subject:
+  // a mask that ends exactly on the object's edge leaves a halo in the
+  // result, because the model has no foreground pixels to infer the true
+  // boundary from. 0 = exact silhouette.
+  segGrowRadius: number
 }
 
 type BatchResult = {
@@ -245,6 +261,7 @@ type AppAction = {
   updateInteractiveSegState: (newState: Partial<InteractiveSegState>) => void
   resetInteractiveSegState: () => void
   handleInteractiveSegAccept: () => void
+  removeClickAt: (index: number) => void
   handleFileManagerMaskSelect: (blob: Blob) => Promise<void>
   showPromptInput: () => boolean
 
@@ -331,6 +348,9 @@ const defaultValues: AppState = {
     isInteractiveSeg: false,
     tmpInteractiveSegMask: null,
     clicks: [],
+    nextClickLabel: 1,
+    revisionToken: 0,
+    segGrowRadius: 9,
   },
 
   cropperState: {
@@ -976,14 +996,35 @@ export const useStore = createWithEqualityFn<AppState & AppAction>()(
 
       handleInteractiveSegAccept: () => {
         set((state) => {
-          if (state.interactiveSegState.tmpInteractiveSegMask) {
-            state.editorState.extraMasks.push(
-              castDraft(state.interactiveSegState.tmpInteractiveSegMask)
-            )
+          const preview = state.interactiveSegState.tmpInteractiveSegMask
+          if (preview) {
+            // Prefer the binary white-on-black mask attached at preview
+            // time; fall back to the RGBA preview if for some reason it
+            // wasn't built (older clients / future refactors).
+            // immer wraps state in WritableDraft, but our helper reads a
+            // plain symbol-keyed property on the underlying element, so
+            // narrow back to HTMLImageElement before calling.
+            const previewEl = preview as unknown as HTMLImageElement
+            const binary = getBinaryMask(previewEl) ?? previewEl
+            state.editorState.extraMasks.push(castDraft(binary))
           }
           state.interactiveSegState = castDraft({
             ...defaultValues.interactiveSegState,
           })
+        })
+      },
+
+      // Remove a single click and bump a counter the Editor component
+      // watches. Whenever the counter increments the Editor re-runs SAM2
+      // with the trimmed click list, so the preview stays in sync.
+      removeClickAt: (index: number) => {
+        const state = get()
+        const remaining = state.interactiveSegState.clicks.filter(
+          (_, i) => i !== index
+        )
+        set((s) => {
+          s.interactiveSegState.clicks = castDraft(remaining)
+          s.interactiveSegState.revisionToken = s.interactiveSegState.revisionToken + 1
         })
       },
 

@@ -494,6 +494,15 @@ class RunPluginRequest(BaseModel):
         [], description="Clicks for interactive seg, [[x,y,0/1], [x2,y2,0/1]]"
     )
     scale: float = Field(2.0, description="Scale for upscaling")
+    # Dilate the interactive-seg mask outward by this many pixels. The
+    # inpainter needs the mask to overlap the subject slightly: a mask that
+    # stops exactly on the object's edge gives it no foreground context and
+    # it tends to leave a halo around the result. 0 = exact silhouette.
+    # The frontend always sends an explicit value, so this default only
+    # applies to direct API callers.
+    seg_grow_radius: int = Field(
+        9, ge=0, le=128, description="Grow (dilate) the SAM2 mask by N pixels"
+    )
 
 
 MediaTab = Literal["input", "output", "mask"]

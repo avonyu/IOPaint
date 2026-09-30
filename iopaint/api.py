@@ -510,7 +510,13 @@ class Api:
         rgb_np_img, _, _, _ = decode_base64_to_image(req.image)
         bgr_or_gray_mask = self.plugins[req.name].gen_mask(rgb_np_img, req)
         torch_gc()
-        res_mask = gen_frontend_mask(bgr_or_gray_mask)
+        # SAM2 (and similar) return float probability maps; skip the
+        # brush-mask dilation so the preview outline follows the real
+        # object edge instead of inflating it by ~4 px.
+        from iopaint.plugins.interactive_seg import InteractiveSeg
+
+        dilate = req.name != InteractiveSeg.name
+        res_mask = gen_frontend_mask(bgr_or_gray_mask, dilate=dilate)
         return Response(
             content=numpy_to_bytes(res_mask, "png"),
             media_type="image/png",
