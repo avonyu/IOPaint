@@ -13,3 +13,4 @@ iopaint/web_app/
 .venv/
 web_app/.env
 .openchamber/
+.ruff_cache/
