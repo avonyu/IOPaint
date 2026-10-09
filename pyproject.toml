@@ -3,7 +3,7 @@ name = "iopaint"
 version = "2.2.0"
 description = "Image inpainting, outpainting tool powered by SOTA AI Model"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [
     { name = "PanicByte", email = "cwq1913@gmail.com" },
@@ -13,6 +13,9 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
@@ -77,6 +80,8 @@ packages.find.include = ["iopaint*"]
 # Type checking strategy: only enforce strict typing on first-party code we own.
 # Vendored third-party model code (ControlNet, BrushNet, PowerPaint, BriARMBG,
 # Segment Anything, AnyText) keeps upstream types untouched.
+# Keep in sync with requires-python above.
+pythonVersion = "3.10"
 include = ["iopaint/__init__.py", "iopaint/api.py", "iopaint/cli.py",
            "iopaint/benchmark.py", "iopaint/download.py", "iopaint/file_manager",
            "iopaint/helper.py", "iopaint/installer.py", "iopaint/model_manager.py",
@@ -94,7 +99,7 @@ exclude = ["iopaint/model", "iopaint/plugins/anime_seg.py",
 
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py310"
 
 [tool.ruff.lint]
 # Strategy: only enforce strict linting on first-party code. Vendored
