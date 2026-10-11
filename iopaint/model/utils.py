@@ -981,12 +981,22 @@ def handle_from_pretrained_exceptions(func, **kwargs):
     try:
         return func(**kwargs)
     except ValueError as e:
-        if "You are trying to load the model files of the `variant=fp16`" in str(e):
-            logger.info("variant=fp16 not found, try revision=fp16")
+        # diffusers reworded this message across releases: the sentence has shipped both
+        # as "You are trying to load the model files of the `variant=...`" and as
+        # "You are trying to load model files of the `variant=...`". Matching the whole
+        # sentence silently stopped matching, which made the fp32 fallback below
+        # unreachable and re-raised instead. Match on stable fragments instead.
+        variant = kwargs.get("variant")
+        if (
+            variant
+            and f"`variant={variant}`" in str(e)
+            and "no such modeling files" in str(e)
+        ):
+            logger.info(f"variant={variant} not found, try revision={variant}")
             try:
-                return func(**{**kwargs, "variant": None, "revision": "fp16"})
-            except Exception as e:
-                logger.info("revision=fp16 not found, try revision=main")
+                return func(**{**kwargs, "variant": None, "revision": variant})
+            except Exception:
+                logger.info(f"revision={variant} not found, try revision=main")
                 return func(**{**kwargs, "variant": None, "revision": "main"})
         raise e
     except OSError as e:
