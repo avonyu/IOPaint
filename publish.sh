@@ -56,6 +56,7 @@ uv sync --group dev
 
 echo "▶ 2/6 Build frontend (web_app/dist)"
 pushd ./web_app >/dev/null
+bun install
 rm -rf dist
 npm run build
 popd >/dev/null
